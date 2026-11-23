@@ -1,4 +1,4 @@
-# herdr mods
+# peerlink herdr mods
 
 Mods for the [herdr](https://herdr.dev) app, made to pair with [peerlink](https://github.com/dfunq/peerlink), which lets the Claude Code agents in your herdr panes talk to each other. The **jira** mod adds a Jira and GitHub panel, and its **Send to agent** button hands a ticket to a running peerlink agent.
 
