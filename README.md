@@ -34,6 +34,12 @@ Before 0.1.0 the mod was called **jira**, with a **herdr-jira** layout. The inst
 rm -rf ~/.config/herdr-app/mods/jira ~/.config/herdr-app/layouts/herdr-jira.json
 ```
 
+## Upgrading to 0.2.2: the work panel's layout id
+Before 0.2.2, the work panel's block in `herdr-work` had the id `work`, the same as herdr's middle column, so dragging the panel's edge didn't resize it. 0.2.2 renames the block to `work-panel`. The installer never replaces a layout you already have, so fix yours by hand: in `~/.config/herdr-app/layouts/herdr-work.json`, change the **second** `"id": "work"` (the block with `"mod": "work"`) to `"id": "work-panel"`. If the middle column then collapses, give it its width back:
+```bash
+herdr-app do layout.resize '{"id":"work","weight":1}'
+```
+
 `tokens.json`, `app.json` and logs are never committed (see `.gitignore`).
 
 ## Releases

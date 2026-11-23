@@ -170,7 +170,7 @@
       "resizable": false
     },
     {
-      "id": "work",
+      "id": "work-panel",
       "type": "block",
       "content": {
         "mod": "work"
