@@ -1,0 +1,9 @@
+# Never commit sign-ins or secrets: each machine makes its own.
+tokens.json
+app.json
+*.log
+__pycache__/
+# herdr-app writes these into every mod folder itself.
+jsconfig.json
+*.d.ts
+.DS_Store
