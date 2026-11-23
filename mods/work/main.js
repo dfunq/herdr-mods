@@ -147,7 +147,6 @@ export default class Jira extends View {
     if (p?.issue) {
       // This copy is the details dialog for one issue.
       this.detailKey = p.issue; this.overlay = p.overlay; this.site = p.site; this.linkInit("issue");
-      this.commentBox = TextareaState.new({ placeholder: "Add a comment…", rows: 3 });
       if (!checking()) this.loadDetail(cx);
       return;
     }
@@ -447,6 +446,8 @@ export default class Jira extends View {
   }
 
   renderDetail() {
+    // Made here, not only for an issue dialog: a PR dialog's link bar opens issues in place (SKY-720).
+    this.commentBox ||= TextareaState.new({ placeholder: "Add a comment…", rows: 3 });
     const t = theme(), d = this.detail, f = d?.fields || {}, rf = d?.renderedFields || {};
     const browse = () => this.site && openUrl(`${this.site}/browse/${this.detailKey}`);
     const link = url => openUrl(url.startsWith("/") && this.site ? this.site + url : url);
