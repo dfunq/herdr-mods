@@ -5,7 +5,7 @@ import { v_flex, h_flex, InputState, Input, TextView } from "gpui-base";
 import { exec, home, theme, shared, setShared, openOverlay, closeOverlay, checking, terminals, window } from "herdr";
 import * as fs from "fs/promises";
 
-export const GH_ICON = "mods/jira/icons/github.svg";
+export const GH_ICON = "mods/work/icons/github.svg";
 const openUrl = url => window().platform === "windows" ? exec("rundll32", ["url.dll,FileProtocolHandler", url]) : exec("open", [url]);
 const ago = iso => {
   const m = Math.max(0, (Date.now() - Date.parse(iso)) / 60000);
@@ -180,10 +180,10 @@ export function installGithub(P) {
   };
 
   P.openPR = function (repo, number) {
-    openOverlay({ mod: "jira", props: { pr: { repo, number } }, kind: "dialog", width: 1000, height: 760 });
+    openOverlay({ mod: "work", props: { pr: { repo, number } }, kind: "dialog", width: 1000, height: 760 });
   };
   P.openGhSettings = function () {
-    openOverlay({ mod: "jira", props: { ghSettings: true }, kind: "dialog", width: 480, height: 640 });
+    openOverlay({ mod: "work", props: { ghSettings: true }, kind: "dialog", width: 480, height: 640 });
   };
   P.sendPR = function (pr) {
     this.openSendItem({ key: `${pr.repository.nameWithOwner.split("/")[1]}#${pr.number}`, summary: pr.title, icon: GH_ICON, tint: true, line: prLine(pr) });
@@ -427,7 +427,7 @@ export function installGithub(P) {
     const toggle = (id, on, flip) => div().id(id).w(36).h(20).flex_none().rounded(10).p(2)
       .bg(on ? t.accent : t.input).on_click((_e, cx) => { flip(); cx.notify(); })
       .child(div().w(16).h(16).rounded(8).bg("#ffffff").when(on, el => el.ml(16)));
-    const tabs = [["integrations", "Integrations", null], ["jira", "Jira", image("mods/jira/icons/jira.svg").w(14).h(14)],
+    const tabs = [["integrations", "Integrations", null], ["jira", "Jira", image("mods/work/icons/jira.svg").w(14).h(14)],
       ["github", "GitHub", svg(GH_ICON).w(14).h(14).text_color(t.foreground)], ["linking", "Linking", null], ["agents", "Agents", null]];
     const tabBar = h_flex().px(14).pt(8).flex_none().gap(2).border_b(1).border_color(t.border)
       .children(tabs.map(([k, label, icon]) => {
@@ -448,7 +448,7 @@ export function installGithub(P) {
       body = v_flex()
         .child(heading("INTEGRATIONS"))
         .child(note("Turned-off integrations leave the toolbar and stop refreshing."))
-        .child(item("jira", "Jira", image("mods/jira/icons/jira.svg").w(20).h(20), "Your issues and the sprint, via Atlassian sign-in"))
+        .child(item("jira", "Jira", image("mods/work/icons/jira.svg").w(20).h(20), "Your issues and the sprint, via Atlassian sign-in"))
         .child(item("github", "GitHub", svg(GH_ICON).w(20).h(20).text_color(t.foreground), "Open PRs in watched repos, via your gh login"));
     } else if (this.stTab === "jira") {
       body = v_flex()

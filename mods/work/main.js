@@ -46,7 +46,7 @@ function typeIcon(type) {
   const k = /escalation|outage|incident|break/.test(n) ? "breakfix"
     : type?.subtask || n.includes("sub") ? "subtask" : n.includes("bug") ? "bug" : n.includes("story") ? "story"
     : n.includes("epic") ? "epic" : n.includes("task") ? "task" : "other";
-  return `mods/jira/icons/${k}.svg`;
+  return `mods/work/icons/${k}.svg`;
 }
 
 // Column order: To Do, In Progress, Blocked, In Review, Ready for QA, then Done.
@@ -217,7 +217,7 @@ export default class Jira extends View {
   }
 
   openSendItem(item) {
-    openOverlay({ mod: "jira", props: { send: item }, kind: "dialog", width: 540, height: 470 });
+    openOverlay({ mod: "work", props: { send: item }, kind: "dialog", width: 540, height: 470 });
   }
 
   doSend(cx) {
@@ -366,14 +366,14 @@ export default class Jira extends View {
       const on = l.id === cur;
       return h_flex().id(`lk-${l.id}`).px(9).h(26).gap(6).items_center().rounded(6).when(on, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .on_click((_e, cx) => this.selectLink(l, cx))
-        .child(l.kind === "issue" ? image("mods/jira/icons/jira.svg").w(13).h(13) : svg(GH_ICON).w(13).h(13).text_color(t.foreground))
+        .child(l.kind === "issue" ? image("mods/work/icons/jira.svg").w(13).h(13) : svg(GH_ICON).w(13).h(13).text_color(t.foreground))
         .child(div().text_size(12).font_semibold().text_color(on ? t.foreground : t.muted).child(l.label))
         .when(!!l.color, el => el.child(div().w(7).h(7).rounded(4).bg(l.color)));
     })).when(this.linkBusy > 0, el => el.child(div().pl(6).text_size(11).text_color(t.dim).child("…")));
   }
 
   showDetail(key) {
-    openOverlay({ mod: "jira", props: { issue: key, site: this.site }, kind: "dialog", width: 1000, height: 760 });
+    openOverlay({ mod: "work", props: { issue: key, site: this.site }, kind: "dialog", width: 1000, height: 760 });
   }
 
   loadDetail(cx) {
@@ -574,10 +574,10 @@ export default class Jira extends View {
     if (this.collapsed()) {
       let w = 340;
       try { w = Number(localStorage.getItem("jira.width")) || 340; } catch {}
-      run("layout.resize", { id: "jira", px: w });
+      run("layout.resize", { id: "work", px: w });
     } else {
       try { localStorage.setItem("jira.width", String(Math.round(this.size?.width || 340))); } catch {}
-      run("layout.resize", { id: "jira", px: STRIP });
+      run("layout.resize", { id: "work", px: STRIP });
     }
   }
 
@@ -601,7 +601,7 @@ export default class Jira extends View {
     return h_flex().id(`mic-${id}`).h(30).px(9).gap(6).items_center().rounded(7).border(1)
       .border_color(on ? "#e5484d" : t.input).when(on, el => el.bg("#e5484d26")).hover(s => s.bg(t.hover))
       .on_click((_e, cx) => this.dictate(id, box, cx))
-      .child(svg("mods/jira/icons/mic.svg").w(14).h(14).text_color(on ? "#e5484d" : t.muted))
+      .child(svg("mods/work/icons/mic.svg").w(14).h(14).text_color(on ? "#e5484d" : t.muted))
       .when(on, el => el.child(div().text_size(12).font_semibold().text_color("#e5484d").child("Listening… click to stop")));
   }
   dictate(id, box, cx) {
@@ -660,8 +660,8 @@ export default class Jira extends View {
     };
     return v_flex().w(STRIP).flex_none().h_full().items_center().pt(8).gap(6).bg(t.chrome).border_l(1).border_color(t.border)
       .child(v_flex().id("tb-peerlink").w(36).py(6).items_center().rounded(8).hover(s => s.bg(t.hover))
-        .on_click(() => { if (!checking()) openPeerlink(); }).child(image("mods/jira/icons/peerlink.svg").w(18).h(18)))
-      .when(enabled("jira"), el => el.child(btn("tb-jira", "jira", image("mods/jira/icons/jira.svg").w(18).h(18), this.issues.length, !!this.error, this.loading)))
+        .on_click(() => { if (!checking()) openPeerlink(); }).child(image("mods/work/icons/peerlink.svg").w(18).h(18)))
+      .when(enabled("jira"), el => el.child(btn("tb-jira", "jira", image("mods/work/icons/jira.svg").w(18).h(18), this.issues.length, !!this.error, this.loading)))
       .when(enabled("github"), el => el.child(btn("tb-github", "github", svg(GH_ICON).w(18).h(18).text_color(t.foreground), (this.prs || []).length, !!this.ghError && this.ghError !== "no-repos", this.ghLoading)))
       .child(div().flex_1())
       .child(this.icon("tb-refresh", "↻", cx => { this.load(cx); this.ghLoad(cx); }, { size: 16 }))
@@ -867,7 +867,7 @@ export default class Jira extends View {
     const at = this.at ? `${this.at.getHours()}:${String(this.at.getMinutes()).padStart(2, "0")}` : "";
     return v_flex().flex_1().min_w(0).h_full()
       .child(h_flex().px(10).h(40).gap(4).items_center().border_b(1).border_color(t.border)
-        .child(image("mods/jira/icons/jira.svg").w(16).h(16).flex_none())
+        .child(image("mods/work/icons/jira.svg").w(16).h(16).flex_none())
         .child(div().pl(2).font_semibold().text_size(13).child("Jira"))
         .child(div().w(6))
         .child(this.tab("v-mine", "Mine", cx => { this.view = "mine"; this.load(cx); }, this.view === "mine"))
@@ -890,7 +890,7 @@ export default class Jira extends View {
         .child(div().id("q-filters").ml(6).w(28).h(28).flex_none().flex().items_center().justify_center().rounded(6).border(1)
           .border_color(this.fmenu ? t.accent : t.input).when(this.fmenu, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
           .on_click((_e, cx) => { this.fmenu = !this.fmenu; this.menu = false; cx.notify(); })
-          .child(svg("mods/jira/icons/filter.svg").w(13).h(13).text_color((shared("jira.filters") || []).some(f => f.jql === this.query) ? t.accent : t.muted))))
+          .child(svg("mods/work/icons/filter.svg").w(13).h(13).text_color((shared("jira.filters") || []).some(f => f.jql === this.query) ? t.accent : t.muted))))
       .when(!!this.fmenu, el => el.child(this.filterMenu()))
       .when(!this.error && this.issues.length > 0, el => el.child(this.pills(this.groups())))
       .child(div().flex_1().id("list").overflow_y_scrollbar().child(this.body()));
