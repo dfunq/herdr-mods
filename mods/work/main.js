@@ -659,13 +659,13 @@ export default class Jira extends View {
           .text_color(bad ? t.blocked : active ? t.foreground : t.muted).child(loading ? "…" : bad ? "!" : String(count)));
     };
     return v_flex().w(STRIP).flex_none().h_full().items_center().pt(8).gap(6).bg(t.chrome).border_l(1).border_color(t.border)
-      .child(v_flex().id("tb-peerlink").w(36).py(6).items_center().rounded(8).hover(s => s.bg(t.hover))
-        .on_click(() => { if (!checking()) openPeerlink(); }).child(image("mods/work/icons/peerlink.svg").w(18).h(18)))
       .when(enabled("jira"), el => el.child(btn("tb-jira", "jira", image("mods/work/icons/jira.svg").w(18).h(18), this.issues.length, !!this.error, this.loading)))
       .when(enabled("github"), el => el.child(btn("tb-github", "github", svg(GH_ICON).w(18).h(18).text_color(t.foreground), (this.prs || []).length, !!this.ghError && this.ghError !== "no-repos", this.ghLoading)))
       .child(div().flex_1())
       .child(this.icon("tb-refresh", "↻", cx => { this.load(cx); this.ghLoad(cx); }, { size: 16 }))
-      .child(div().pb(8).child(this.icon("tb-settings", "⚙", () => this.openGhSettings(), { size: 16 })));
+      .child(this.icon("tb-settings", "⚙", () => this.openGhSettings(), { size: 16 }))
+      .child(div().pb(8).child(v_flex().id("tb-peerlink").w(36).py(6).items_center().rounded(8).hover(s => s.bg(t.hover))
+        .on_click(() => { if (!checking()) openPeerlink(); }).child(image("mods/work/icons/peerlink.svg").w(18).h(18))));
   }
 
   // To Do grey, In Progress blue, In Review / QA purple, Done green.
