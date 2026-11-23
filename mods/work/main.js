@@ -574,10 +574,10 @@ export default class Jira extends View {
     if (this.collapsed()) {
       let w = 340;
       try { w = Number(localStorage.getItem("jira.width")) || 340; } catch {}
-      run("layout.resize", { id: "work", px: w });
+      run("layout.resize", { id: "work-panel", px: w });
     } else {
       try { localStorage.setItem("jira.width", String(Math.round(this.size?.width || 340))); } catch {}
-      run("layout.resize", { id: "work", px: STRIP });
+      run("layout.resize", { id: "work-panel", px: STRIP });
     }
   }
 

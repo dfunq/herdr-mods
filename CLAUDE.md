@@ -6,7 +6,7 @@ The README covers what's here and how users install it. This file is the handoff
 
 ## What's in it
 
-- `mods/work/`: the **work** herdr-app mod (Jira panel, GitHub tab, Send to agent, a button that opens peerlink's web UI). It was called `jira` before 0.1.0. Kept on purpose so existing installs carry over: the `~/.herdr-jira/` data folder (login tokens, `app.json`, logs), the `enabled("jira")` integration toggle, and the `jira.*` shared-state keys. The mod's own ids (`openOverlay({mod: "work"})`, `layout.resize({id: "work"})`, `mods/work/...` asset paths) must match the folder name.
+- `mods/work/`: the **work** herdr-app mod (Jira panel, GitHub tab, Send to agent, a button that opens peerlink's web UI). It was called `jira` before 0.1.0. Kept on purpose so existing installs carry over: the `~/.herdr-jira/` data folder (login tokens, `app.json`, logs), the `enabled("jira")` integration toggle, and the `jira.*` shared-state keys. The mod's own ids (`openOverlay({mod: "work"})`, `mods/work/...` asset paths) must match the folder name. Its layout block is `work-panel`, not `work`: `work` is herdr's middle column, and reusing it broke drag-resize (SKY-718), so `layout.resize` targets `work-panel`.
 - `layouts/herdr-work.json`: the layout, with peerlink's `peerlink-spaces` and `peerlink-agents` panels and the `work` block.
 - `_home/.herdr-jira/`: `oauth.py` (Atlassian sign-in) and `stt.py` (dictation), copied to the user's home.
 - `plugins/agent-model/`: a plugin for the **herdr terminal app** (not herdr-app) that shows `$model`/`$effort` sidebar tokens. Opt-in.
