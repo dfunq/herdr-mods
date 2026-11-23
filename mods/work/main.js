@@ -118,6 +118,9 @@ function ago(iso) {
 export default class Jira extends View {
   init(_props, cx) {
     const p = props();
+    // An issue dialog and a PR dialog both need it: a PR dialog's link bar opens linked issues in place (SKY-720).
+    // State can't be made during render, so it's made here.
+    if (p?.pr || p?.issue) this.commentBox = TextareaState.new({ placeholder: "Add a comment…", rows: 3 });
     if (p?.pr) {
       this.prRef = p.pr; this.overlay = p.overlay; this.linkInit("pr");
       if (!checking()) this.loadPR(cx);
@@ -347,6 +350,7 @@ export default class Jira extends View {
   }
   selectLink(l, cx) {
     if (l.kind === "issue") {
+      if (this.detailKey !== l.key) this.commentBox?.set_value("");
       this.linkView = "issue"; this.detailKey = l.key; this.detailError = null; this.detail = this.issueCache.get(l.key) || null;
       if (!this.detail) this.loadDetail(cx);
     } else {
@@ -446,8 +450,6 @@ export default class Jira extends View {
   }
 
   renderDetail() {
-    // Made here, not only for an issue dialog: a PR dialog's link bar opens issues in place (SKY-720).
-    this.commentBox ||= TextareaState.new({ placeholder: "Add a comment…", rows: 3 });
     const t = theme(), d = this.detail, f = d?.fields || {}, rf = d?.renderedFields || {};
     const browse = () => this.site && openUrl(`${this.site}/browse/${this.detailKey}`);
     const link = url => openUrl(url.startsWith("/") && this.site ? this.site + url : url);
