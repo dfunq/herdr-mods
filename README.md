@@ -17,6 +17,14 @@ peerlink installs them: in its web UI, open Settings → **herdr app**, set the 
    In the panel's Settings, list your project keys (e.g. `ABC`): they scope the Sprint tab and PR-to-ticket linking. Empty means every project.
 3. GitHub: the panel uses your own `gh` login (`gh auth login`).
 
+The data folder is still called `~/.herdr-jira/` (it was named when the mod was called jira) so your sign-in carries over. It holds your `app.json`, your login (`tokens.json`) and logs.
+
+## Upgrading from the jira mod
+Before 0.1.0 the mod was called **jira**, with a **herdr-jira** layout. The installer adds the new ones but never deletes anything, so switch herdr to the **herdr-work** layout and then remove the old copies:
+```bash
+rm -rf ~/.config/herdr-app/mods/jira ~/.config/herdr-app/layouts/herdr-jira.json
+```
+
 `tokens.json`, `app.json` and logs are never committed (see `.gitignore`).
 
 ## Releases

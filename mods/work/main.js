@@ -50,7 +50,7 @@ function typeIcon(type) {
 }
 
 // Column order: To Do, In Progress, Blocked, In Review, Ready for QA, then Done.
-// Statuses he didn't name slot in next to their nearest neighbour.
+// Statuses not in this list slot in next to their nearest neighbour.
 const ORDER = ["to do", "selected for development", "in progress", "blocked", "needs more information", "in review", "review",
   "ready for qa", "qa", "deferred", "backlog", "done"];
 function rank(g) {
