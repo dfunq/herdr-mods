@@ -1,0 +1,22 @@
+id = "herdr-mods.agent-model"
+name = "Agent Model"
+version = "0.4.0"
+min_herdr_version = "0.9.0"
+description = "Shows each Claude agent's current model and effort as $model and $effort sidebar tokens"
+platforms = ["macos", "linux"]
+
+# Start the watcher once the server is up; it sweeps every agent, then
+# refreshes whenever a transcript changes (catches /model with no reply yet).
+[[startup]]
+command = ["python3", "model.py", "--watch"]
+
+# Re-check whenever an agent starts or finishes a turn.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["python3", "model.py"]
+
+[[actions]]
+id = "refresh"
+title = "Refresh agent models"
+contexts = ["workspace"]
+command = ["python3", "model.py"]

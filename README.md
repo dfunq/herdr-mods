@@ -9,6 +9,15 @@ peerlink installs them: in its web UI, open Settings → **herdr app**, set the 
 - Files it replaces are copied to `~/.peerlink/backups/herdr-mods-<time>/` first. They don't go beside the mod, because herdr-app would load a backup folder in `mods/` as another mod.
 - `_home/`: copied into your home folder. Here that's `~/.herdr-jira/oauth.py` and `stt.py`, which the work mod runs (Jira sign-in and dictation).
 
+## Optional: agent-model (a herdr plugin)
+`plugins/agent-model/` is a plugin for the herdr terminal app, not a herdr-app mod. It shows each Claude agent's model and effort as `$model` and `$effort` tokens in herdr's sidebar, and keeps them current after `/model` and `/effort`. It's **off by default**: Install herdr mods doesn't copy `plugins/`, so nothing runs until you install it yourself:
+```bash
+herdr plugin install dfunq/herdr-mods/plugins/agent-model --ref v0.2.0
+```
+Then put `$model` and `$effort` in your herdr sidebar format. To turn it off: `herdr plugin disable herdr-mods.agent-model`, or `uninstall` to remove it.
+
+**You only need one of the two.** peerlink's own Agents panel already shows each agent's model and effort when you hover over its row. Use this plugin if you'd rather see them in herdr's terminal sidebar.
+
 ## On a new machine
 1. Clone the repo, set `herdr_mods_source` to the clone, and press **Install herdr mods**. To update later, `git pull` and press it again.
 2. Jira sign-in: put the Atlassian app's id and secret in `~/.herdr-jira/app.json`, as
