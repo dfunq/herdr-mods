@@ -18,3 +18,9 @@ peerlink installs them: in its web UI, open Settings → **herdr app**, set the 
 3. GitHub: the panel uses your own `gh` login (`gh auth login`).
 
 `tokens.json`, `app.json` and logs are never committed (see `.gitignore`).
+
+## Releases
+Each change goes on its own branch and merges to `main` through a pull request once it's reviewed. `main` can't be force-pushed or deleted. A release bumps `VERSION`, is tagged `vX.Y.Z` on its merge commit, and gets a GitHub release with notes. To install a release rather than the latest `main`, check out its tag in your clone before pressing **Install herdr mods**:
+```bash
+git -C ~/Repos/herdr-mods checkout v0.1.0
+```
