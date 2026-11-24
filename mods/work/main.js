@@ -1,7 +1,7 @@
 // Read-only Jira panel: your open issues or the open sprint, plus quick lookup by key or text.
 // Auth: Atlassian OAuth through ~/.herdr-jira/oauth.py (app.json = your OAuth app, tokens.json = the login).
 import { View, div, image, svg } from "gpui-kit";
-import { installGithub, GH_ICON, enabled, tabOrder, linkCfg, ticketKeys, prsForKey, prColor } from "./github.js";
+import { installGithub, GH_ICON, enabled, jiraMax, tabOrder, linkCfg, ticketKeys, prsForKey, prColor } from "./github.js";
 import { v_flex, h_flex, InputState, Input, TextView, TextareaState, Textarea } from "gpui-base";
 import { exec, home, readTextFile, theme, run, checking, nextCommand, props, openOverlay, closeOverlay, terminals, hc, notify, shared, setShared, window } from "herdr";
 
@@ -187,7 +187,7 @@ export default class Jira extends View {
   load(cx) {
     if (!enabled("jira")) return;
     cx.spawn(async cx => {
-      this.loading = true; cx.notify();
+      this.loading = true; this.more = false; cx.notify();
       try {
         const c = await helper("token");
         if (c.error === "no-app" || c.error === "no-login") { this.issues = []; this.error = c.error; return; }
@@ -196,17 +196,28 @@ export default class Jira extends View {
         const api = `https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3`;
         const headers = { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" };
         const key = /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(this.query) ? this.query.toUpperCase() : null;
-        const url = key
-          ? `${api}/issue/${key}?fields=${FIELDS}`
-          : `${api}/search/jql?maxResults=50&fields=${FIELDS}&jql=${encodeURIComponent(this.jql())}`;
-        const r = await fetch(url, { headers });
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          this.issues = [];
-          this.error = r.status === 401 ? "no-login" : (body.errorMessages || []).join(" ") || `Jira returned ${r.status}`;
-          return;
+        // Jira returns at most 100 issues a page, so a search pages with nextPageToken until the max is reached.
+        const max = jiraMax(), found = [];
+        let token = null, more = false;
+        for (;;) {
+          const url = key
+            ? `${api}/issue/${key}?fields=${FIELDS}`
+            : `${api}/search/jql?maxResults=${Math.min(100, max - found.length)}&fields=${FIELDS}&jql=${encodeURIComponent(this.jql())}`
+              + (token ? `&nextPageToken=${encodeURIComponent(token)}` : "");
+          const r = await fetch(url, { headers });
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.issues = [];
+            this.error = r.status === 401 ? "no-login" : (body.errorMessages || []).join(" ") || `Jira returned ${r.status}`;
+            return;
+          }
+          if (key) { found.push(body); break; }
+          found.push(...(body.issues || []));
+          token = body.nextPageToken;
+          if (!token || body.isLast || !(body.issues || []).length) break;
+          if (found.length >= max) { more = true; break; }
         }
-        this.issues = key ? [body] : (body.issues || []).sort(byPriority);
+        this.issues = found.slice(0, max).sort(byPriority); this.more = more;
         this.error = null; this.at = new Date();
       } catch (e) {
         this.issues = []; this.error = String(e?.message || e);
@@ -682,7 +693,7 @@ export default class Jira extends View {
           .text_color(bad ? t.blocked : active ? t.foreground : t.muted).child(loading ? "…" : bad ? "!" : String(count)));
     };
     return v_flex().w(STRIP).flex_none().h_full().items_center().pt(8).gap(6).bg(t.chrome).border_l(1).border_color(t.border)
-      .when(enabled("jira"), el => el.child(btn("tb-jira", "jira", image("mods/work/icons/jira.svg").w(18).h(18), this.issues.length, !!this.error, this.loading)))
+      .when(enabled("jira"), el => el.child(btn("tb-jira", "jira", image("mods/work/icons/jira.svg").w(18).h(18), this.issues.length + (this.more ? "+" : ""), !!this.error, this.loading)))
       .when(enabled("github"), el => el.child(btn("tb-github", "github", svg(GH_ICON).w(18).h(18).text_color(t.foreground), (this.prs || []).length, !!this.ghError && this.ghError !== "no-repos", this.ghLoading)))
       .child(div().flex_1())
       .child(this.icon("tb-refresh", "↻", cx => { this.load(cx); this.ghLoad(cx); }, { size: 16 }))
@@ -789,7 +800,7 @@ export default class Jira extends View {
         .border_color(none ? t.accent : t.border).when(none, el => el.bg(t.selected))
         .text_color(none ? t.foreground : t.muted).hover(s => s.bg(t.hover))
         .on_click((_e, cx) => { try { localStorage.setItem("jira.statuses", "[]"); } catch {} this.menu = false; cx.notify(); })
-        .child(`All · ${this.issues.length}`))
+        .child(`All · ${this.issues.length}${this.more ? "+" : ""}`))
       .child(h_flex().id("f-menu").flex_1().min_w(0).px(10).h(26).gap(6).items_center().rounded(6).border(1).text_size(11.5)
         .border_color(this.menu || !none ? t.accent : t.border).when(!none, el => el.bg(t.selected))
         .text_color(none ? t.muted : t.foreground).hover(s => s.bg(t.hover))
