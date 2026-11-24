@@ -694,6 +694,11 @@ export default class Jira extends View {
             .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); this.site && openUrl(`${this.site}/browse/${i.key}`); })
             .child(i.key))
+          // Grouped by assignee or epic, the group header no longer says the status, so the row does.
+          .when(this.groupBy() !== "status" && !!f.status?.name, el => el.child(h_flex().flex_none().gap(4).items_center()
+            .px(6).rounded(4).bg(t.raised)
+            .child(div().w(6).h(6).rounded(3).bg(this.statusColor(f.status.statusCategory?.key, f.status.name)))
+            .child(div().text_size(10.5).text_color(t.muted).child(f.status.name))))
           .child(div().flex_1())
           .child(div().text_color(t.dim).text_size(10.5).child(f.updated ? ago(f.updated) : ""))
           .when(!!sprintOf(f), el => el.child(sprintChip(sprintOf(f), t)))
