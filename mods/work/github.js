@@ -106,11 +106,17 @@ export async function localRepos() {
 }
 export const watched = () => shared("github.watch");
 // Which integrations show in the toolbar (shared "integrations"); both on until changed in Settings.
+// A tab row's order (shared "<key>", e.g. "jira.tabs.order"): saved names first, then any new ones. The first is the default view.
+export const tabOrder = (key, names) => {
+  const saved = shared(key), keep = Array.isArray(saved) ? saved.filter((n, i) => names.includes(n) && saved.indexOf(n) === i) : [];
+  return [...keep, ...names.filter(n => !keep.includes(n))];
+};
+const GH_VIEWS = ["mine", "watched"], GH_KINDS = ["pr", "issue"];
 export const enabled = name => ((shared("integrations") || {})[name] ?? true) !== false;
 
 export function installGithub(P) {
   P.ghInit = function (cx) {
-    this.ghView = "mine"; this.ghKind = "pr"; this.ghIssues = []; this.prs = []; this.ghError = null; this.ghLoading = false; this.ghQuery = "";
+    this.ghView = tabOrder("gh.tabs.order", GH_VIEWS)[0]; this.ghKind = tabOrder("gh.kinds.order", GH_KINDS)[0]; this.ghIssues = []; this.prs = []; this.ghError = null; this.ghLoading = false; this.ghQuery = "";
     this.ghInput = InputState.new({ placeholder: "repo, repo#123, or text…" });
     this.ghInput.on("submit", (_e, cx) => { this.ghQuery = this.ghInput.value().trim(); this.ghRun(cx); });
     this.ghInput.on("change", (_e, cx) => {
@@ -289,14 +295,14 @@ export function installGithub(P) {
         .child(svg(GH_ICON).w(16).h(16).flex_none().text_color(t.foreground))
         .child(div().pl(2).font_semibold().text_size(13).child("GitHub"))
         .child(div().w(6))
-        .child(this.tab("gh-mine", "Mine", cx => { this.ghView = "mine"; this.ghLoad(cx); }, this.ghView === "mine" && !this.ghQuery))
-        .child(this.tab("gh-watched", "Watched", cx => { this.ghView = "watched"; this.ghLoad(cx); }, this.ghView === "watched" && !this.ghQuery))
+        .children(this.tabRow("gh.tabs.order", { mine: "Mine", watched: "Watched" }, name => !this.ghQuery && this.ghView === name,
+          (name, cx) => { this.ghView = name; this.ghLoad(cx); }))
         .child(div().flex_1())
         .child(div().text_size(10.5).text_color(t.dim).child(this.ghLoading ? "…" : at))
         .child(this.icon("gh-refresh", "↻", cx => this.ghLoad(cx), { size: 17 })))
       .child(h_flex().px(10).pt(6).flex_none().gap(4).items_center()
-        .child(this.tab("gh-k-pr", "Pull requests", cx => { this.ghKind = "pr"; this.ghLoad(cx); }, this.ghKind === "pr"))
-        .child(this.tab("gh-k-issue", "Issues", cx => { this.ghKind = "issue"; this.ghLoad(cx); }, this.ghKind === "issue")))
+        .children(this.tabRow("gh.kinds.order", { pr: "Pull requests", issue: "Issues" }, name => this.ghKind === name,
+          (name, cx) => { this.ghKind = name; this.ghLoad(cx); })))
       .child(h_flex().px(10).py(6).flex_none().child(
         h_flex().flex_1().h(28).px(8).rounded(6).border(1).border_color(t.input).bg(t.background).items_center()
           .child(Input.new(this.ghInput).flex_1().h_full().text_size(12).text_color(t.foreground))

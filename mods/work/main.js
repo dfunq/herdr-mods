@@ -1,7 +1,7 @@
 // Read-only Jira panel: your open issues or the open sprint, plus quick lookup by key or text.
 // Auth: Atlassian OAuth through ~/.herdr-jira/oauth.py (app.json = your OAuth app, tokens.json = the login).
 import { View, div, image, svg } from "gpui-kit";
-import { installGithub, GH_ICON, enabled, linkCfg, ticketKeys, prsForKey, prColor } from "./github.js";
+import { installGithub, GH_ICON, enabled, tabOrder, linkCfg, ticketKeys, prsForKey, prColor } from "./github.js";
 import { v_flex, h_flex, InputState, Input, TextView, TextareaState, Textarea } from "gpui-base";
 import { exec, home, readTextFile, theme, run, checking, nextCommand, props, openOverlay, closeOverlay, terminals, hc, notify, shared, setShared, window } from "herdr";
 
@@ -22,6 +22,7 @@ const viewJql = view => ({
   sprint: `${sprintJql()} ORDER BY priority DESC, created DESC`,
   all: "statusCategory != Done ORDER BY priority DESC, created DESC",
 })[view];
+const JIRA_VIEWS = ["mine", "sprint", "all"];
 const GROUPINGS = { status: "status", assignee: "assignee", epic: "epic" };
 const EPIC = "#9F8FEF";
 const CONSOLE_URL = "https://developer.atlassian.com/console/myapps/";
@@ -155,7 +156,7 @@ export default class Jira extends View {
       if (!checking()) this.loadDetail(cx);
       return;
     }
-    this.view = "mine"; this.issues = []; this.error = null; this.loading = false; this.query = "";
+    this.view = tabOrder("jira.tabs.order", JIRA_VIEWS)[0]; this.issues = []; this.error = null; this.loading = false; this.query = "";
     this.input = InputState.new({ placeholder: "ABC-123, text, or JQL…" });
     this.filterName = InputState.new({ placeholder: "Name (optional)" });
     this.filterName.on("submit", (_e, cx) => this.saveFilter(cx));
@@ -600,6 +601,23 @@ export default class Jira extends View {
       .hover(s => s.bg(t.hover)).on_click((_e, cx) => on(cx)).child(label);
   }
 
+  // A row of view tabs the user can reorder: press one, release it over another to move it there.
+  // The order is kept in shared state under `key`; the first tab is the view the panel opens on.
+  tabRow(key, labels, isActive, pick) {
+    const t = theme(), order = tabOrder(key, Object.keys(labels)), drag = this.tabDrag?.key === key ? this.tabDrag : null;
+    return order.map(name => this.tab(`${key}-${name}`, labels[name], cx => pick(name, cx), isActive(name))
+      .when(!!drag && drag.over === name && drag.name !== name, el => el.bg(t.hover).text_color(t.foreground))
+      .on_mouse_down("left", (_e, cx) => { this.tabDrag = { key, name, over: name }; cx.notify(); })
+      .on_hover((on, cx) => { const d = this.tabDrag; if (on && d?.key === key && d.over !== name) { d.over = name; cx.notify(); } })
+      .on_mouse_up("left", (_e, cx) => {
+        const d = this.tabDrag; this.tabDrag = null;
+        if (d?.key !== key || d.name === name) return;
+        const next = order.filter(n => n !== d.name);
+        next.splice(next.indexOf(name) + (order.indexOf(d.name) < order.indexOf(name) ? 1 : 0), 0, d.name);
+        setShared(key, next); cx.notify();
+      }));
+  }
+
   // ---- dictation: ~/.herdr-jira/stt.py runs Chrome's Web Speech API in a small app window ----
   micBtn(id, box) {
     const t = theme(), on = this.dictating === id;
@@ -919,6 +937,7 @@ export default class Jira extends View {
     if (this.ghSettingsMode) return this.renderGhSettings();
     const t = theme();
     return h_flex().id("root").size_full().bg(t.chrome).text_color(t.foreground)
+      .on_mouse_up("left", (_e, cx) => { if (this.tabDrag) { this.tabDrag = null; cx.notify(); } })
       .on_size_change((size, cx) => { this.size = size; cx.notify(); })
       .when(!this.collapsed() && (enabled("jira") || enabled("github")), el => el.child(
         (this.tool === "github" && enabled("github")) || !enabled("jira") ? this.renderGithub() : this.jiraPanel()))
@@ -933,9 +952,8 @@ export default class Jira extends View {
         .child(image("mods/work/icons/jira.svg").w(16).h(16).flex_none())
         .child(div().pl(2).font_semibold().text_size(13).child("Jira"))
         .child(div().w(6))
-        .child(this.tab("v-mine", "Mine", cx => { this.view = "mine"; this.load(cx); }, this.view === "mine"))
-        .child(this.tab("v-sprint", "Sprint", cx => { this.view = "sprint"; this.load(cx); }, this.view === "sprint"))
-        .child(this.tab("v-all", "All", cx => { this.view = "all"; this.load(cx); }, this.view === "all"))
+        .children(this.tabRow("jira.tabs.order", { mine: "Mine", sprint: "Sprint", all: "All" }, name => this.view === name,
+          (name, cx) => { this.view = name; this.load(cx); }))
         .child(div().flex_1())
         .child(div().text_size(10.5).text_color(t.dim).child(this.loading ? "…" : at))
         .child(this.icon("refresh", "↻", cx => this.load(cx), { size: 17 })))
