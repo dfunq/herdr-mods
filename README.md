@@ -1,6 +1,6 @@
 # herdr mods
 
-Mods for the [herdr](https://herdr.dev) app, made to pair with [peerlink](https://github.com/dfunq/peerlink), which lets the Claude Code agents in your herdr panes talk to each other. The **work** mod is a side panel for your work: Jira issues and sprints (grouped by status, assignee or epic), GitHub PRs and issues, a **Send to agent** button that hands a ticket to a running peerlink agent, and a button that opens peerlink's web UI. Its layout, `herdr-work`, puts it beside peerlink's Spaces and Agents panels.
+Mods for the [herdr](https://herdr.dev) app, made to pair with [peerlink](https://github.com/dfunq/peerlink), which lets the Claude Code agents in your herdr panes talk to each other. The **work** mod is a side panel for your work: Jira issues and sprints (grouped by status, assignee or epic; a sub-task shows under "No epic", since its parent is a story), GitHub PRs and issues, a **Send to agent** button that hands a ticket to a running peerlink agent, and a button that opens peerlink's web UI. Its layout, `herdr-work`, puts it beside peerlink's Spaces and Agents panels.
 
 peerlink installs them: in its web UI, open Settings → **herdr app**, set the herdr mods folder to your clone of this repo (`herdr_mods_source`), and press **Install herdr mods**.
 
