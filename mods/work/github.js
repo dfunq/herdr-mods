@@ -112,6 +112,10 @@ export const tabOrder = (key, names) => {
   return [...keep, ...names.filter(n => !keep.includes(n))];
 };
 const GH_VIEWS = ["mine", "watched"], GH_KINDS = ["pr", "issue"];
+// How many tickets the Jira list fetches at most (shared "jira.max"): 50 until changed in Settings, 1 to 500.
+export const JIRA_MAX_CAP = 500;
+export const clampMax = n => Math.min(JIRA_MAX_CAP, Math.max(1, Math.round(Number(n)) || 50));
+export const jiraMax = () => clampMax(shared("jira.max") ?? 50);
 export const enabled = name => ((shared("integrations") || {})[name] ?? true) !== false;
 
 export function installGithub(P) {
@@ -414,6 +418,8 @@ export function installGithub(P) {
     this.linkSet = linkCfg();
     this.keysInput = InputState.new({ placeholder: "ABC, XYZ (empty = any project)" });
     this.keysInput.set_value(this.linkSet.keys.join(", "));
+    this.maxInput = InputState.new({ placeholder: "50" });
+    this.maxInput.set_value(String(jiraMax()));
     this.addInput = InputState.new({ placeholder: "owner/repo" });
     this.addInput.on("submit", (_e, cx) => this.addRepo(cx));
     if (checking()) return;
@@ -458,6 +464,10 @@ export function installGithub(P) {
         .child(item("github", "GitHub", svg(GH_ICON).w(20).h(20).text_color(t.foreground), "Open PRs in watched repos, via your gh login"));
     } else if (this.stTab === "jira") {
       body = v_flex()
+        .child(heading("MAX JIRA TICKETS"))
+        .child(note(`How many tickets a list shows at most, from 1 to ${JIRA_MAX_CAP}. More tickets take longer to load. Applies from the next refresh.`))
+        .child(h_flex().w(90).h(30).px(8).mb(16).rounded(6).border(1).border_color(t.input).bg(t.background).items_center()
+          .child(Input.new(this.maxInput).flex_1().h_full().text_size(12).text_color(t.foreground)))
         .child(heading("ACCOUNT"))
         .child(note("Signed in with Atlassian OAuth. Signing out deletes the saved login; the panel then offers Log in again."))
         .child(h_flex().px(4).gap(8)
@@ -516,6 +526,7 @@ export function installGithub(P) {
       setShared("link", { on: this.linkSet.on, keys: this.keysInput.value().split(/[\s,]+/).map(k => k.trim().toUpperCase()).filter(Boolean) });
       setShared("github.watch", [...this.watchSel].sort());
       setShared("jira.send", { ...(shared("jira.send") || {}), agent: this.defAgent });
+      setShared("jira.max", clampMax(this.maxInput.value().trim() || 50));
       closeOverlay(this.overlay);
     };
     return v_flex().size_full().bg(t.popover).text_color(t.foreground)
