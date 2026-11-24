@@ -27,7 +27,7 @@ Both must print nothing. (`ABC-123` is the made-up placeholder the panel shows; 
 
 ## Shipping a change
 
-1. Branch off `main` (name it after the change, not a ticket key), commit, push, open a PR. **Push to this repo, never a fork**: check `gh api user --jq .login` is the repo owner first. A PR from a fork shows that other account on a public repo; before merging, `gh pr view N --json headRepositoryOwner` must be the owner, or push the commit to a branch here and re-open it. `main` has a ruleset: no force push, no deletion. Every PR gets an independent review before merge.
+1. Branch off `main` (name it after the change, not a ticket key), commit, push, open a PR. **Push only from the Mac.** No agent pushes or opens a PR from Windows, where `gh` is signed in as a different account. If a Windows test needs a code change, write it out with `git format-patch -1 -o <folder>` and hand the patch back to the Mac. **Push to this repo, never a fork**: check `gh api user --jq .login` is the repo owner first. A PR from a fork shows that other account on a public repo; before merging, `gh pr view N --json headRepositoryOwner` must be the owner, or push the commit to a branch here and re-open it. `main` has a ruleset: no force push, no deletion. Every PR gets an independent review before merge.
 2. Bump `VERSION` in the PR (and `version` in a plugin's `herdr-plugin.toml` when the plugin changed).
 3. Merge, then tag and release the merge commit:
    ```bash
