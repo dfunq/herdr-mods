@@ -7,7 +7,7 @@ import { exec, home, readTextFile, theme, run, checking, nextCommand, props, ope
 
 const STRIP = 48;
 const DIR = () => `${home()}/.herdr-jira`;
-const FIELDS = "summary,status,assignee,priority,issuetype,created,updated,customfield_10020";
+const FIELDS = "summary,status,assignee,priority,issuetype,created,updated,parent,customfield_10020";
 // Priority across schemes: P1/Highest first, P4/Lowest last; ties by created, newest first.
 const PRI = { highest: 1, high: 2, medium: 3, low: 4, lowest: 5 };
 const priRank = i => { const n = (i.fields?.priority?.name || "").toLowerCase(), m = n.match(/^p(\d)/); return m ? Number(m[1]) : PRI[n] ?? 9; };
@@ -22,6 +22,8 @@ const viewJql = view => ({
   sprint: `${sprintJql()} ORDER BY priority DESC, created DESC`,
   all: "statusCategory != Done ORDER BY priority DESC, created DESC",
 })[view];
+const GROUPINGS = { status: "status", assignee: "assignee", epic: "epic" };
+const EPIC = "#9F8FEF";
 const CONSOLE_URL = "https://developer.atlassian.com/console/myapps/";
 // peerlink's web UI, with its own sign-in: peerlink asks on screen, then the browser opens signed in.
 // ~/.peerlink/launch.json (written by peerlink) names its Python and daemon; else the launcher.
@@ -768,10 +770,12 @@ export default class Jira extends View {
       .child(h_flex().id("f-menu").flex_1().min_w(0).px(10).h(26).gap(6).items_center().rounded(6).border(1).text_size(11.5)
         .border_color(this.menu || !none ? t.accent : t.border).when(!none, el => el.bg(t.selected))
         .text_color(none ? t.muted : t.foreground).hover(s => s.bg(t.hover))
-        .on_click((_e, cx) => { this.menu = !this.menu; cx.notify(); })
+        .on_click((_e, cx) => { this.menu = !this.menu; this.gmenu = false; cx.notify(); })
         .children(chosen.slice(0, 4).map(g => div().w(7).h(7).flex_none().rounded(4).bg(this.statusColor(g.cat, g.name))))
         .child(div().flex_1().truncate().child(summary))
-        .child(div().text_size(10).text_color(t.dim).child(this.menu ? "▴" : "▾")));
+        .child(div().text_size(10).text_color(t.dim).child(this.menu ? "▴" : "▾")))
+      .child(this.groupButton());
+    if (this.gmenu) return v_flex().child(bar).child(this.groupMenu());
     if (!this.menu) return bar;
     const item = g => {
       const sel = on.has(g.name);
@@ -799,10 +803,58 @@ export default class Jira extends View {
     const by = new Map();
     for (const i of this.issues) {
       const s = i.fields?.status, name = s?.name || "Unknown";
-      if (!by.has(name)) by.set(name, { name, cat: s?.statusCategory?.key, items: [] });
+      if (!by.has(name)) by.set(name, { name, mode: "status", cat: s?.statusCategory?.key, items: [] });
       by.get(name).items.push(i);
     }
     return [...by.values()].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  }
+
+  // The list's grouping: status (the default), assignee or epic, remembered in "jira.groupBy".
+  groupBy() { try { return localStorage.getItem("jira.groupBy") || "status"; } catch { return "status"; } }
+  setGroupBy(mode, cx) { try { localStorage.setItem("jira.groupBy", mode); } catch {} this.gmenu = false; cx.notify(); }
+
+  // The issues the status filter lets through, grouped by the chosen key.
+  grouped() {
+    const mode = this.groupBy(), on = this.picked(), status = this.groups();
+    if (mode === "status") { const shown = status.filter(g => on.has(g.name)); return shown.length ? shown : status; }
+    const keep = status.some(g => on.has(g.name)) ? i => on.has(i.fields?.status?.name || "Unknown") : () => true;
+    const isEpic = it => it?.hierarchyLevel === 1 || /^epic$/i.test(it?.name || "");
+    const by = new Map();
+    for (const i of this.issues.filter(keep)) {
+      const f = i.fields || {};
+      let id, name, last = false, epic = null;
+      if (mode === "assignee") {
+        id = f.assignee?.accountId || ""; name = f.assignee?.displayName || "Unassigned"; last = !f.assignee;
+      } else {
+        epic = isEpic(f.issuetype) ? { key: i.key, summary: f.summary } : isEpic(f.parent?.fields?.issuetype) ? { key: f.parent.key, summary: f.parent.fields?.summary } : null;
+        id = epic?.key || ""; name = epic ? `${epic.key} ${epic.summary || ""}`.trim() : "No epic"; last = !epic;
+      }
+      if (!by.has(id)) by.set(id, { id: `${mode}:${id}`, name, mode, last, epic, items: [] });
+      by.get(id).items.push(i);
+    }
+    return [...by.values()].sort((a, b) => a.last - b.last || a.name.localeCompare(b.name));
+  }
+
+  // The "Group" button beside the status filter, with its menu.
+  groupButton() {
+    const t = theme(), mode = this.groupBy();
+    return h_flex().id("g-menu").flex_none().px(10).h(26).gap(6).items_center().rounded(6).border(1).text_size(11.5)
+      .border_color(this.gmenu || mode !== "status" ? t.accent : t.border).when(mode !== "status", el => el.bg(t.selected))
+      .text_color(mode === "status" ? t.muted : t.foreground).hover(s => s.bg(t.hover))
+      .on_click((_e, cx) => { this.gmenu = !this.gmenu; this.menu = false; cx.notify(); })
+      .child(div().child(`By ${GROUPINGS[mode] || "status"}`))
+      .child(div().text_size(10).text_color(t.dim).child(this.gmenu ? "▴" : "▾"));
+  }
+
+  groupMenu() {
+    const t = theme(), mode = this.groupBy();
+    return v_flex().mx(10).mb(8).p(4).rounded(8).border(1).border_color(t.border).bg(t.popover)
+      .child(div().px(8).pt(4).pb(4).text_size(10.5).font_semibold().text_color(t.dim).child("GROUP BY"))
+      .children(Object.entries(GROUPINGS).map(([m, label]) => h_flex().id(`gb-${m}`).px(8).py(5).gap(8).items_center().rounded(5)
+        .hover(s => s.bg(t.hover)).when(m === mode, el => el.bg(t.selected))
+        .on_click((_e, cx) => this.setGroupBy(m, cx))
+        .child(div().w(14).text_size(11).text_color(t.accent).child(m === mode ? "✓" : ""))
+        .child(div().flex_1().text_size(12).child(label[0].toUpperCase() + label.slice(1)))));
   }
 
   folded(name) { try { return JSON.parse(localStorage.getItem("jira.folded") || "{}")[name] === true; } catch { return false; } }
@@ -816,14 +868,18 @@ export default class Jira extends View {
   }
 
   group(g) {
-    const t = theme(), shut = this.folded(g.name);
+    // Status groups keep their old fold keys (the bare name); assignee and epic groups use "<mode>:<id>".
+    const t = theme(), key = g.id || g.name, shut = this.folded(key);
+    const mark = g.mode === "assignee" ? avatar(g.last ? "" : g.name, 14)
+      : g.mode === "epic" ? div().w(8).h(8).rounded(2).bg(g.last ? "#8993A4" : EPIC)
+      : div().w(8).h(8).rounded(4).bg(this.statusColor(g.cat, g.name));
     return v_flex().pb(6)
-      .child(h_flex().id(`g-${g.name}`).px(8).py(6).gap(7).items_center().rounded(6).border_b(1).border_color(t.border)
-        .hover(s => s.bg(t.hover)).on_click((_e, cx) => this.fold(g.name, cx))
+      .child(h_flex().id(`g-${key}`).px(8).py(6).gap(7).items_center().rounded(6).border_b(1).border_color(t.border)
+        .hover(s => s.bg(t.hover)).on_click((_e, cx) => this.fold(key, cx))
         .child(div().w(10).text_size(10).text_color(t.dim).child(shut ? "▸" : "▾"))
-        .child(div().w(8).h(8).rounded(4).bg(this.statusColor(g.cat, g.name)))
-        .child(div().text_size(11).font_semibold().text_color(t.foreground).child(g.name.toUpperCase()))
-        .child(div().flex_1())
+        .child(mark)
+        .child(div().flex_1().min_w(0).truncate().text_size(11).font_semibold().text_color(t.foreground)
+          .child(g.mode === "status" || !g.mode ? g.name.toUpperCase() : g.name))
         .child(div().px(7).rounded(8).bg(t.raised).text_size(10.5).font_semibold().text_color(t.muted).child(String(g.items.length))))
       .when(!shut, el => el.child(v_flex().pt(4).gap(2).children(g.items.map(i => this.row(i)))));
   }
@@ -847,8 +903,7 @@ export default class Jira extends View {
     }
     if (this.error) return div().p(12).text_size(12).text_color(t.blocked).child(this.error);
     if (!this.issues.length) return div().p(12).text_size(12).text_color(t.dim).child(this.loading ? "Loading…" : "No issues.");
-    const on = this.picked(), all = this.groups(), shown = all.filter(g => on.has(g.name));
-    return v_flex().px(4).pb(8).children((shown.length ? shown : all).map(g => this.group(g)));
+    return v_flex().px(4).pb(8).children(this.grouped().map(g => this.group(g)));
   }
 
   render(cx) {
