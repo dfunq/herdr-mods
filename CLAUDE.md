@@ -4,9 +4,18 @@ The README covers what's here and how users install it. This file is the handoff
 
 **This repo is public.** Nothing committed may name a real person, company, machine, home folder, Jira site, project or ticket key, peerlink agent or space, including in commit messages and release notes. Nothing org-specific may be hardcoded: the Jira site (optional `site` in `~/.herdr-jira/app.json`), project keys (the panel's link keys, shared state `link.keys`, which also scope the Sprint tab) and the default agent (shared `jira.send.agent`, else the first live agent) all come from the user's own settings. Before every push: `git grep -niE '<the names you know from this machine>'` and `git log -1 --format=%an`.
 
+**No ticket keys anywhere.** A tracker key (`ABC-123`) in a commit subject, PR title, branch name, release note, comment or doc names a private project. Check before every push:
+
+```bash
+git grep -nE '(^|[^A-Za-z0-9])[A-Z][A-Z0-9]+-[0-9]+' -- ':!CLAUDE.md' | grep -v 'ABC-123'
+git log origin/main..HEAD --format=%s | grep -E '[A-Z][A-Z0-9]+-[0-9]+'
+```
+
+Both must print nothing. (`ABC-123` is the made-up placeholder the panel shows; macOS `grep` has no `\b`, hence the longer pattern.) Say what changed instead: "the comment box opens in PR dialogs", not "(ABC-720)".
+
 ## What's in it
 
-- `mods/work/`: the **work** herdr-app mod (Jira panel, GitHub tab, Send to agent, a button that opens peerlink's web UI). It was called `jira` before 0.1.0. Kept on purpose so existing installs carry over: the `~/.herdr-jira/` data folder (login tokens, `app.json`, logs), the `enabled("jira")` integration toggle, and the `jira.*` shared-state keys. The mod's own ids (`openOverlay({mod: "work"})`, `mods/work/...` asset paths) must match the folder name. Its layout block is `work-panel`, not `work`: `work` is herdr's middle column, and reusing it broke drag-resize (SKY-718), so `layout.resize` targets `work-panel`.
+- `mods/work/`: the **work** herdr-app mod (Jira panel, GitHub tab, Send to agent, a button that opens peerlink's web UI). It was called `jira` before 0.1.0. Kept on purpose so existing installs carry over: the `~/.herdr-jira/` data folder (login tokens, `app.json`, logs), the `enabled("jira")` integration toggle, and the `jira.*` shared-state keys. The mod's own ids (`openOverlay({mod: "work"})`, `mods/work/...` asset paths) must match the folder name. Its layout block is `work-panel`, not `work`: `work` is herdr's middle column, and reusing it broke drag-resize, so `layout.resize` targets `work-panel`.
 - `layouts/herdr-work.json`: the layout, with peerlink's `peerlink-spaces` and `peerlink-agents` panels and the `work` block.
 - `_home/.herdr-jira/`: `oauth.py` (Atlassian sign-in) and `stt.py` (dictation), copied to the user's home.
 - `plugins/agent-model/`: a plugin for the **herdr terminal app** (not herdr-app) that shows `$model`/`$effort` sidebar tokens. Opt-in.
@@ -18,7 +27,7 @@ The README covers what's here and how users install it. This file is the handoff
 
 ## Shipping a change
 
-1. Branch off `main`, commit, push, open a PR. `main` has a ruleset: no force push, no deletion. Every PR gets an independent review before merge.
+1. Branch off `main` (name it after the change, not a ticket key), commit, push, open a PR. **Push to this repo, never a fork**: check `gh api user --jq .login` is the repo owner first. A PR from a fork shows that other account on a public repo; before merging, `gh pr view N --json headRepositoryOwner` must be the owner, or push the commit to a branch here and re-open it. `main` has a ruleset: no force push, no deletion. Every PR gets an independent review before merge.
 2. Bump `VERSION` in the PR (and `version` in a plugin's `herdr-plugin.toml` when the plugin changed).
 3. Merge, then tag and release the merge commit:
    ```bash

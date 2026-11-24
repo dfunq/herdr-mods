@@ -120,7 +120,7 @@ function ago(iso) {
 export default class Jira extends View {
   init(_props, cx) {
     const p = props();
-    // An issue dialog and a PR dialog both need it: a PR dialog's link bar opens linked issues in place (SKY-720).
+    // An issue dialog and a PR dialog both need it: a PR dialog's link bar opens linked issues in place.
     // State can't be made during render, so it's made here.
     if (p?.pr || p?.issue) this.commentBox = TextareaState.new({ placeholder: "Add a comment…", rows: 3 });
     if (p?.pr) {
@@ -832,7 +832,7 @@ export default class Jira extends View {
       if (!by.has(id)) by.set(id, { id: `${mode}:${id}`, name, mode, last, epic, items: [] });
       by.get(id).items.push(i);
     }
-    return [...by.values()].sort((a, b) => a.last - b.last || a.name.localeCompare(b.name));
+    return [...by.values()].sort((a, b) => a.last - b.last || a.name.localeCompare(b.name, undefined, { numeric: true }));
   }
 
   // The "Group" button beside the status filter, with its menu.
