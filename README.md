@@ -26,6 +26,10 @@ Then put `$model` and `$effort` in your herdr sidebar format. To turn it off: `h
    In the panel's Settings, list your project keys (e.g. `ABC`): they scope the Sprint tab and PR-to-ticket linking. Empty means every project.
 3. GitHub: the panel uses your own `gh` login (`gh auth login`).
 
+Two things the panel assumes can be changed in herdr-app's shared state (`~/.config/herdr-app/shared.json`, edited while the app is closed):
+- `"github.root"`: the folder your repos are cloned in, read for the default watch list. `~/.dev` until set.
+- `"jira.sprintField"`: your Jira site's sprint field id, when it isn't the usual `customfield_10020`.
+
 The data folder is still called `~/.herdr-jira/` (it was named when the mod was called jira) so your sign-in carries over. It holds your `app.json`, your login (`tokens.json`) and logs.
 
 ## Upgrading from the jira mod

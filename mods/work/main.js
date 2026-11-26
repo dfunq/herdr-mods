@@ -1,13 +1,19 @@
 // Read-only Jira panel: your open issues or the open sprint, plus quick lookup by key or text.
 // Auth: Atlassian OAuth through ~/.herdr-jira/oauth.py (app.json = your OAuth app, tokens.json = the login).
 import { View, div, image, svg } from "gpui-kit";
-import { installGithub, GH_ICON, enabled, jiraMax, tabOrder, linkCfg, ticketKeys, prsForKey, prColor } from "./github.js";
+import { installGithub, GH_ICON, enabled, jiraMax, tabOrder, linkCfg, ticketKeys, prsForKey, prColor, openUrl, shown, loadAgentNames, agentName, liveAgents } from "./github.js";
 import { v_flex, h_flex, InputState, Input, TextView, TextareaState, Textarea } from "gpui-base";
-import { exec, home, readTextFile, theme, run, checking, nextCommand, props, openOverlay, closeOverlay, terminals, hc, notify, shared, setShared, window } from "herdr";
+import { exec, home, readTextFile, theme, run, checking, nextCommand, props, openOverlay, closeOverlay, hc, notify, shared, setShared, window } from "herdr";
 
 const STRIP = 48;
 const DIR = () => `${home()}/.herdr-jira`;
-const FIELDS = "summary,status,assignee,priority,issuetype,created,updated,parent,customfield_10020";
+// The sprint field's id differs between Jira sites: shared "jira.sprintField" names yours, else the usual one.
+const sprintField = () => { const f = shared("jira.sprintField"); return /^customfield_\d+$/.test(f || "") ? f : "customfield_10020"; };
+const sprints = f => { const v = f?.[sprintField()]; return Array.isArray(v) ? v.filter(x => x && typeof x === "object") : []; };
+const fields = () => `summary,status,assignee,priority,issuetype,created,updated,parent,${sprintField()}`;
+// fetch has no timeout of its own: a request that never answers would leave the panel loading for good.
+const timed = (cx, request, ms = 20000) => Promise.race([request,
+  new Promise((_, fail) => cx.timer.after(ms, () => fail(new Error("Jira didn't answer in time"))))]);
 // Priority across schemes: P1/Highest first, P4/Lowest last; ties by created, newest first.
 const PRI = { highest: 1, high: 2, medium: 3, low: 4, lowest: 5 };
 const priRank = i => { const n = (i.fields?.priority?.name || "").toLowerCase(), m = n.match(/^p(\d)/); return m ? Number(m[1]) : PRI[n] ?? 9; };
@@ -35,7 +41,6 @@ async function openPeerlink() {
     : exec(`${home()}/.peerlink/bin/peerlink`, ["web"], { timeout: 120000 })).catch(e => ({ code: 1, stderr: String(e) }));
   if (r.code !== 0) notify({ title: "peerlink", body: (r.stderr || r.stdout || "").trim().split("\n").pop() || "Couldn't open peerlink", level: "warning" });
 }
-const openUrl = url => window().platform === "windows" ? exec("rundll32", ["url.dll,FileProtocolHandler", url]) : exec("open", [url]);
 const PY = () => window().platform === "windows" ? "python" : "python3";
 
 async function helper(cmd, timeout = 30000) {
@@ -81,11 +86,11 @@ const prioPill = (name, size = 10.5) => {
 
 // The issue's current sprint (active first, then the next future one); null when it's in no open sprint.
 function sprintOf(f) {
-  const open = (f.customfield_10020 || []).filter(x => x.state === "active" || x.state === "future");
+  const open = sprints(f).filter(x => x.state === "active" || x.state === "future");
   return open.find(x => x.state === "active") || open[0] || null;
 }
 const sprintChip = (sp, t) => {
-  const short = (sp.name.match(/sprint\s*\d+/i) || [sp.name])[0];
+  const name = String(sp.name || "Sprint"), short = (name.match(/sprint\s*\d+/i) || [name])[0];
   const active = sp.state === "active";
   return div().px(5).rounded(4).text_size(10.5).font_semibold()
     .bg(active ? "#579DFF26" : t.raised).text_color(active ? "#579DFF" : t.dim).child(active ? short : `Next: ${short}`);
@@ -93,20 +98,8 @@ const sprintChip = (sp, t) => {
 
 // Send to agent: types the ticket (plus an optional prompt) into a live peerlink agent's terminal.
 // The default agent is set with the "Make default" checkbox in the send dialog (shared state "jira.send"); until set, the first live agent.
-const defaultAgent = () => (shared("jira.send") || {}).agent || "";
-// peerlink labels each agent's terminal with the agent's id (a3); its name comes from ~/.peerlink/agents.json.
-let agentNames = {};
-const loadAgentNames = async cx => {
-  try {
-    const d = JSON.parse(await readTextFile(`${home()}/.peerlink/agents.json`) || "{}");
-    agentNames = Object.fromEntries((d.agents || []).filter(a => a.id && a.name).map(a => [a.id, a.name]));
-    cx?.notify();
-  } catch {}
-};
-const liveAgents = () => terminals()
-  .filter(k => k.state === "live" && k.labels?.["peerlink.agent"])
-  .map(k => ({ name: agentNames[k.labels["peerlink.agent"]] || k.labels["peerlink.agent"], address: k.address, status: typeof k.status === "string" ? k.status : (k.status?.state || "") }))
-  .sort((a, b) => a.name.localeCompare(b.name));
+// It is kept by name; one saved as an agent's id still finds its agent.
+const defaultAgent = () => agentName((shared("jira.send") || {}).agent || "");
 const sendLog = line => { try { const stamp = `${new Date().toISOString()} ${String(line)}`; if (window().platform === "windows") exec("powershell", ["-NoProfile", "-Command", `Add-Content -LiteralPath '${home()}\\.herdr-jira\\send.log' -Value '${stamp.replace(/'/g, "''")}'`]); else exec("/bin/sh", ["-c", 'printf "%s\\n" "$1" >> "$2"', "sh", stamp, `${DIR()}/send.log`]); } catch {} };
 const ticketLine = (issue, site) => {
   const f = issue.fields || {};
@@ -136,8 +129,8 @@ export default class Jira extends View {
     }
     if (p?.send) {
       this.sendIssue = p.send; this.overlay = p.overlay;
-      if (!checking()) cx.spawn(async cx => loadAgentNames(cx));
       this.agent = defaultAgent() || liveAgents()[0]?.name || ""; this.agentMenu = false; this.makeDefault = false;
+      if (!checking()) cx.spawn(async cx => { await loadAgentNames(); this.agent = agentName(this.agent); cx.notify(); });
       this.prompt = TextareaState.new({ placeholder: "What should the agent do with it? (optional)", rows: 6 });
       // Enter sends (dropping the newline the textarea just typed); Shift+Enter keeps its newline.
       this.prompt.on("submit", (e, cx) => {
@@ -172,7 +165,8 @@ export default class Jira extends View {
     if (checking()) return;
     cx.spawn(async cx => { for (;;) { const c = await nextCommand(); if (c === "toggle") this.toggle(); else if (c === "filter") this.menu = !this.menu; else if (c === "saved-filters") { this.fmenu = !this.fmenu; this.menu = false; } else if (c.startsWith("send-")) { const i = this.issues.find(x => x.key === c.slice(5)); if (i) this.openSend(i); } else if (c.startsWith("show-")) this.showDetail(c.slice(5)); else if (c.startsWith("pr-")) { const m = c.slice(3).match(/^(.+)#(\d+)$/); if (m) this.openPR(m[1], Number(m[2])); } else if (c.startsWith("prsend-")) { const pr = (this.prs || []).find(x => `${x.repository.nameWithOwner}#${x.number}` === c.slice(7)); if (pr) this.sendPR(pr); } else if (c === "gh-settings") this.openGhSettings(); else if (c === "tool-github" || c === "tool-jira") this.setTool(c.slice(5)); cx.notify(); } });
     this.load(cx);
-    cx.timer.every(120000, cx => this.load(cx));
+    // Polls only while the window shows; a tick soon after it comes back catches up.
+    cx.timer.every(15000, cx => { if (shown() && Date.now() - (this.loadedAt || 0) >= 120000) this.load(cx); });
   }
 
   jql() {
@@ -186,29 +180,38 @@ export default class Jira extends View {
 
   load(cx) {
     if (!enabled("jira")) return;
+    // Only the newest request may fill the list: an older, slower answer is for a tab or search already left.
+    const seq = this.loadSeq = (this.loadSeq || 0) + 1, jql = this.jql(), query = this.query;
+    this.loadedAt = Date.now();
     cx.spawn(async cx => {
-      this.loading = true; this.more = false; cx.notify();
+      const stale = () => seq !== this.loadSeq;
+      const clear = error => { this.issues = []; this.more = false; this.warn = null; this.error = error; };
+      // A refresh of the list already showing keeps it when Jira can't be reached; a new search shows the error.
+      const fail = msg => { if (jql === this.shownJql && this.issues.length) this.warn = msg; else clear(msg); };
+      this.loading = true; cx.notify();
       try {
         const c = await helper("token");
-        if (c.error === "no-app" || c.error === "no-login") { this.issues = []; this.error = c.error; return; }
-        if (c.error) { this.issues = []; this.error = c.error; return; }
+        if (stale()) return;
+        if (c.error === "no-app" || c.error === "no-login") { clear(c.error); return; }
+        if (c.error) { fail(c.error); return; }
         this.site = c.site;
         const api = `https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3`;
         const headers = { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" };
-        const key = /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(this.query) ? this.query.toUpperCase() : null;
+        const key = /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(query) ? query.toUpperCase() : null;
         // Jira returns at most 100 issues a page, so a search pages with nextPageToken until the max is reached.
         const max = jiraMax(), found = [];
         let token = null, more = false;
         for (;;) {
           const url = key
-            ? `${api}/issue/${key}?fields=${FIELDS}`
-            : `${api}/search/jql?maxResults=${Math.min(100, max - found.length)}&fields=${FIELDS}&jql=${encodeURIComponent(this.jql())}`
+            ? `${api}/issue/${key}?fields=${fields()}`
+            : `${api}/search/jql?maxResults=${Math.min(100, max - found.length)}&fields=${fields()}&jql=${encodeURIComponent(jql)}`
               + (token ? `&nextPageToken=${encodeURIComponent(token)}` : "");
-          const r = await fetch(url, { headers });
+          const r = await timed(cx, fetch(url, { headers }));
           const body = await r.json().catch(() => ({}));
+          if (stale()) return;
           if (!r.ok) {
-            this.issues = [];
-            this.error = r.status === 401 ? "no-login" : (body.errorMessages || []).join(" ") || `Jira returned ${r.status}`;
+            if (r.status === 401) clear("no-login");
+            else fail((body.errorMessages || []).join(" ") || `Jira returned ${r.status}`);
             return;
           }
           if (key) { found.push(body); break; }
@@ -217,12 +220,13 @@ export default class Jira extends View {
           if (!token || body.isLast || !(body.issues || []).length) break;
           if (found.length >= max) { more = true; break; }
         }
-        this.issues = found.slice(0, max).sort(byPriority); this.more = more;
-        this.error = null; this.at = new Date();
+        this.issues = found.slice(0, max).sort(byPriority); this.more = more; this.shownJql = jql;
+        this.error = null; this.warn = null; this.at = new Date();
       } catch (e) {
-        this.issues = []; this.error = String(e?.message || e);
+        if (!stale()) fail(String(e?.message || e));
       } finally {
-        this.loading = false; cx.notify();
+        if (!stale()) this.loading = false;
+        cx.notify();
       }
     });
   }
@@ -354,8 +358,8 @@ export default class Jira extends View {
       try {
         const c = await helper("token");
         if (!c.error) for (const k of keys) {
-          const r = await fetch(`https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3/issue/${k}?fields=summary`,
-            { headers: { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" } });
+          const r = await timed(cx, fetch(`https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3/issue/${k}?fields=summary`,
+            { headers: { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" } }));
           if (r.ok) { this.site ||= c.site; this.linkIssue(k, cx); }
         }
       } catch {}
@@ -394,25 +398,28 @@ export default class Jira extends View {
   }
 
   loadDetail(cx) {
+    // The issue asked for: another may be picked from the link bar before this one answers.
+    const key = this.detailKey, current = () => this.detailKey === key;
     cx.spawn(async cx => {
       try {
         const c = await helper("token");
-        if (c.error) { this.detailError = c.error === "no-login" ? "Sign in from the Jira panel first." : c.error; return; }
+        if (c.error) { if (current()) this.detailError = c.error === "no-login" ? "Sign in from the Jira panel first." : c.error; return; }
         this.site = c.site;
-        const f = "summary,status,assignee,reporter,priority,issuetype,created,updated,description,labels,parent,comment,customfield_10020";
-        const r = await fetch(`https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3/issue/${this.detailKey}?fields=${f}&expand=renderedFields`,
-          { headers: { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" } });
+        const f = `summary,status,assignee,reporter,priority,issuetype,created,updated,description,labels,parent,comment,${sprintField()}`;
+        const r = await timed(cx, fetch(`https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3/issue/${key}?fields=${f}&expand=renderedFields`,
+          { headers: { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" } }));
         const body = await r.json().catch(() => ({}));
-        if (!r.ok) { this.detailError = (body.errorMessages || []).join(" ") || `Jira returned ${r.status}`; return; }
+        if (!r.ok) { if (current()) this.detailError = (body.errorMessages || []).join(" ") || `Jira returned ${r.status}`; return; }
         // Subtasks and an epic's child issues both have this issue as parent.
-        const kids = await fetch(`https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3/search/jql?maxResults=100&fields=summary,status,priority,issuetype,assignee&jql=${encodeURIComponent(`parent = ${this.detailKey} ORDER BY created ASC`)}`,
-          { headers: { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" } }).then(x => x.ok ? x.json() : {}).catch(() => ({}));
+        const kids = await timed(cx, fetch(`https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3/search/jql?maxResults=100&fields=summary,status,priority,issuetype,assignee&jql=${encodeURIComponent(`parent = ${key} ORDER BY created ASC`)}`,
+          { headers: { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" } })).then(x => x.ok ? x.json() : {}).catch(() => ({}));
         body.children = kids.issues || [];
+        this.issueCache?.set(key, body);
+        if (!current()) return;
         this.detail = body;
-        this.issueCache?.set(this.detailKey, body);
-        this.linkIssue(this.detailKey, cx);
+        this.linkIssue(key, cx);
       } catch (e) {
-        this.detailError = String(e?.message || e);
+        if (current()) this.detailError = String(e?.message || e);
       } finally {
         cx.notify();
       }
@@ -420,12 +427,12 @@ export default class Jira extends View {
   }
 
   // ---- writes from the issue dialog (need write:jira-work on the OAuth login) ----
-  async jiraCall(method, path, body) {
+  async jiraCall(cx, method, path, body) {
     const c = await helper("token");
     if (c.error) throw new Error(c.error === "no-login" ? "Sign in from the Jira panel first." : c.error);
-    const r = await fetch(`https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3${path}`, {
+    const r = await timed(cx, fetch(`https://api.atlassian.com/ex/jira/${c.cloud_id}/rest/api/3${path}`, {
       method, headers: { Authorization: `Bearer ${c.access_token}`, Accept: "application/json", "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined });
+      body: body ? JSON.stringify(body) : undefined }));
     const out = await r.json().catch(() => ({}));
     if (r.status === 401 || r.status === 403) throw new Error("Jira refused the change. The panel's sign-in needs write:jira-work: add it to your OAuth app, then sign out and back in (Settings → Jira).");
     if (!r.ok) throw new Error((out.errorMessages || []).concat(Object.values(out.errors || {})).join(" ") || `Jira returned ${r.status}`);
@@ -436,7 +443,7 @@ export default class Jira extends View {
     if (!this.statusMenu) { cx.notify(); return; }
     this.transitions = null; cx.notify();
     cx.spawn(async cx => {
-      try { this.transitions = (await this.jiraCall("GET", `/issue/${this.detailKey}/transitions`)).transitions || []; }
+      try { this.transitions = (await this.jiraCall(cx, "GET", `/issue/${this.detailKey}/transitions`)).transitions || []; }
       catch (e) { this.writeError = String(e?.message || e); this.statusMenu = false; }
       cx.notify();
     });
@@ -444,7 +451,7 @@ export default class Jira extends View {
   doTransition(tr, cx) {
     this.busyWrite = true; cx.notify();
     cx.spawn(async cx => {
-      try { await this.jiraCall("POST", `/issue/${this.detailKey}/transitions`, { transition: { id: tr.id } }); this.statusMenu = false; this.loadDetail(cx); }
+      try { await this.jiraCall(cx, "POST", `/issue/${this.detailKey}/transitions`, { transition: { id: tr.id } }); this.statusMenu = false; this.loadDetail(cx); }
       catch (e) { this.writeError = String(e?.message || e); }
       this.busyWrite = false; cx.notify();
     });
@@ -457,7 +464,7 @@ export default class Jira extends View {
       content: p.split("\n").flatMap((l, i) => [...(i ? [{ type: "hardBreak" }] : []), ...(l ? [{ type: "text", text: l }] : [])]) })) };
     this.busyWrite = true; this.writeError = null; cx.notify();
     cx.spawn(async cx => {
-      try { await this.jiraCall("POST", `/issue/${this.detailKey}/comment`, { body: doc }); this.commentBox.set_value(""); this.loadDetail(cx); }
+      try { await this.jiraCall(cx, "POST", `/issue/${this.detailKey}/comment`, { body: doc }); this.commentBox.set_value(""); this.loadDetail(cx); }
       catch (e) { this.writeError = String(e?.message || e); }
       this.busyWrite = false; cx.notify();
     });
@@ -482,7 +489,7 @@ export default class Jira extends View {
         .child(div().p(18).text_size(12.5).text_color(this.detailError ? t.blocked : t.dim).child(this.detailError || "Loading…"));
     }
     const fmt = iso => iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
-    const sprint = (f.customfield_10020 || []).map(s => s.name).pop();
+    const sprint = sprints(f).map(s => s.name).pop();
     const color = this.statusColor(f.status?.statusCategory?.key, f.status?.name);
     const label = text => div().pb(5).text_size(10.5).font_semibold().text_color(t.dim).child(text.toUpperCase());
     const person = (p, size = 22) => h_flex().gap(8).items_center()
@@ -694,7 +701,7 @@ export default class Jira extends View {
     };
     return v_flex().w(STRIP).flex_none().h_full().items_center().pt(8).gap(6).bg(t.chrome).border_l(1).border_color(t.border)
       .when(enabled("jira"), el => el.child(btn("tb-jira", "jira", image("mods/work/icons/jira.svg").w(18).h(18), this.issues.length + (this.more ? "+" : ""), !!this.error, this.loading)))
-      .when(enabled("github"), el => el.child(btn("tb-github", "github", svg(GH_ICON).w(18).h(18).text_color(t.foreground), (this.prs || []).length, !!this.ghError && this.ghError !== "no-repos", this.ghLoading)))
+      .when(enabled("github"), el => el.child(btn("tb-github", "github", svg(GH_ICON).w(18).h(18).text_color(t.foreground), (this.prs || []).length + (this.ghKind !== "issue" && (this.ghTotal || 0) > (this.prs || []).length ? "+" : ""), !!this.ghError && this.ghError !== "no-repos", this.ghLoading)))
       .child(div().flex_1())
       .child(this.icon("tb-refresh", "↻", cx => { this.load(cx); this.ghLoad(cx); }, { size: 16 }))
       .child(this.icon("tb-settings", "⚙", () => this.openGhSettings(), { size: 16 }))
@@ -833,7 +840,11 @@ export default class Jira extends View {
             .on_click((_e, cx) => { this.menu = false; cx.notify(); }).child("Done"))));
   }
 
-  groups() {
+  // What a render reads many times (once a row, once a group) is worked out once per render.
+  once(name, make) { const m = (this.memo ||= {}); return name in m ? m[name] : (m[name] = make()); }
+
+  groups() { return this.once("groups", () => this.statusGroups()); }
+  statusGroups() {
     const by = new Map();
     for (const i of this.issues) {
       const s = i.fields?.status, name = s?.name || "Unknown";
@@ -844,8 +855,8 @@ export default class Jira extends View {
   }
 
   // The list's grouping: status (the default), assignee or epic, remembered in "jira.groupBy".
-  groupBy() { try { return localStorage.getItem("jira.groupBy") || "status"; } catch { return "status"; } }
-  setGroupBy(mode, cx) { try { localStorage.setItem("jira.groupBy", mode); } catch {} this.gmenu = false; cx.notify(); }
+  groupBy() { return this.once("groupBy", () => { try { return localStorage.getItem("jira.groupBy") || "status"; } catch { return "status"; } }); }
+  setGroupBy(mode, cx) { try { localStorage.setItem("jira.groupBy", mode); } catch {} this.memo = {}; this.gmenu = false; cx.notify(); }
 
   // The issues the status filter lets through, grouped by the chosen key.
   grouped() {
@@ -891,14 +902,14 @@ export default class Jira extends View {
         .child(div().flex_1().text_size(12).child(label[0].toUpperCase() + label.slice(1)))));
   }
 
-  folded(name) { try { return JSON.parse(localStorage.getItem("jira.folded") || "{}")[name] === true; } catch { return false; } }
+  folded(name) { return this.once("folded", () => { try { return JSON.parse(localStorage.getItem("jira.folded") || "{}") || {}; } catch { return {}; } })[name] === true; }
 
   fold(name, cx) {
     let m = {};
     try { m = JSON.parse(localStorage.getItem("jira.folded") || "{}"); } catch {}
     m[name] = !m[name];
     try { localStorage.setItem("jira.folded", JSON.stringify(m)); } catch {}
-    cx.notify();
+    this.memo = {}; cx.notify();
   }
 
   group(g) {
@@ -930,7 +941,7 @@ export default class Jira extends View {
     if (this.error === "no-app") {
       return v_flex().p(14).gap(10).text_size(12).text_color(t.muted)
         .child(div().text_color(t.foreground).font_semibold().text_size(13).child("One-time setup"))
-        .child(div().child("Create an OAuth 2.0 app (callback http://localhost:8765/callback, Jira scopes read:jira-work + read:jira-user), then paste its client ID and secret."))
+        .child(div().child("Create an OAuth 2.0 app (callback http://localhost:8765/callback, Jira scopes read:jira-work + read:jira-user, and write:jira-work to comment and change status), then paste its client ID and secret."))
         .child(this.action("console", "1. Open Atlassian developer console", () => openUrl(CONSOLE_URL), false))
         .child(this.action("edit", "2. Paste client ID + secret", () => this.editApp(), false))
         .child(this.action("retry", "3. Continue", cx => this.load(cx), true));
@@ -941,6 +952,7 @@ export default class Jira extends View {
   }
 
   render(cx) {
+    this.memo = {};
     if (this.sendIssue) return this.renderSend();
     if (this.linkView === "pr") return this.renderPR();
     if (this.detailKey) return this.renderDetail();
@@ -966,7 +978,7 @@ export default class Jira extends View {
         .children(this.tabRow("jira.tabs.order", { mine: "Mine", sprint: "Sprint", all: "All" }, name => this.view === name,
           (name, cx) => { this.view = name; this.load(cx); }))
         .child(div().flex_1())
-        .child(div().text_size(10.5).text_color(t.dim).child(this.loading ? "…" : at))
+        .child(div().text_size(10.5).text_color(this.warn && !this.loading ? t.blocked : t.dim).child(this.loading ? "…" : this.warn ? `! ${at}` : at))
         .child(this.icon("refresh", "↻", cx => this.load(cx), { size: 17 })))
       .child(h_flex().px(10).py(6).child(
         h_flex().flex_1().h(28).px(8).rounded(6).border(1).border_color(t.input).bg(t.background).items_center()

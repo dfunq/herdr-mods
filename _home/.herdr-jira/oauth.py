@@ -7,10 +7,12 @@
 app.json (written by you): {"client_id": "...", "client_secret": "...", "site": "your-site.atlassian.net" (optional)}
 tokens.json (written here): access/refresh tokens and the chosen site.
 """
-import http.server, json, os, secrets, sys, time, urllib.parse, urllib.request, webbrowser
+import contextlib, html, http.client, http.server, json, os, secrets, subprocess, sys, time
+import urllib.error, urllib.parse, urllib.request, webbrowser
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 APP, TOKENS = os.path.join(DIR, "app.json"), os.path.join(DIR, "tokens.json")
+PIDFILE = os.path.join(DIR, "login.pid")
 PORT = 8765
 REDIRECT = f"http://localhost:{PORT}/callback"
 SCOPES = "read:jira-work write:jira-work read:jira-user offline_access"
@@ -24,8 +26,18 @@ def log(msg):
         pass
 
 
+def drop_pidfile():
+    """Remove login.pid, but only when it is this process's."""
+    try:
+        if int(open(PIDFILE).read()) == os.getpid():
+            os.remove(PIDFILE)
+    except Exception:
+        pass
+
+
 def fail(msg, code=1):
     log("fail: " + str(msg))
+    drop_pidfile()
     print(json.dumps({"error": msg}))
     sys.exit(code)
 
@@ -50,24 +62,105 @@ def save(tok, extra):
     data = {**extra, "access_token": tok["access_token"],
             "refresh_token": tok.get("refresh_token") or extra.get("refresh_token"),
             "expires_at": time.time() + int(tok.get("expires_in", 3600)) - 60}
-    with open(TOKENS, "w", encoding="utf-8") as f:
-        json.dump(data, f)
+    try:
+        os.chmod(DIR, 0o700)  # tokens live here: owner only (does nothing useful on Windows)
+    except OSError:
+        pass
+    # Write beside the file, then swap it in: a reader never sees half a file.
+    tmp = "%s.%d.tmp" % (TOKENS, os.getpid())
+    try:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, TOKENS)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
     return data
+
+
+def load():
+    try:
+        t = json.load(open(TOKENS, encoding="utf-8"))
+        return t if isinstance(t, dict) else None
+    except Exception:
+        return None
+
+
+@contextlib.contextmanager
+def locked():
+    """Hold tokens.lock: one refresh at a time, because Atlassian replaces the refresh token on every use.
+    Without a lock (an odd filesystem, a long wait on Windows) the refresh still goes ahead."""
+    f = None
+    try:
+        f = open(os.path.join(DIR, "tokens.lock"), "a+")
+        try:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX)
+        except ImportError:
+            import msvcrt
+            f.seek(0)
+            for _ in range(3):  # each try waits about 10 s
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        if f:
+            f.close()  # closing lets the lock go
+
+
+def refresh(a, t):
+    """Trade the refresh token for new tokens. Only Atlassian saying no means the login is gone;
+    anything else leaves tokens.json as it is, to try again later."""
+    if not t.get("refresh_token"):
+        fail("no-login")
+    try:
+        tok = post("https://auth.atlassian.com/oauth/token", {
+            "grant_type": "refresh_token", "client_id": a["client_id"], "client_secret": a["client_secret"],
+            "refresh_token": t["refresh_token"]})
+    except urllib.error.HTTPError as e:
+        fail("no-login" if e.code in (400, 401, 403) else f"Atlassian returned {e.code}")
+    except (OSError, http.client.HTTPException):  # no network, DNS, timeout, dropped connection
+        fail("Can't reach Atlassian")
+    except ValueError:
+        fail("Atlassian sent an answer that can't be read")
+    if not isinstance(tok, dict) or not tok.get("access_token"):
+        fail("Atlassian sent an answer that can't be read")
+    return save(tok, t)
+
+
+def is_helper(pid):
+    """Is this pid a sign-in helper? Pids get reused, so check before stopping one."""
+    try:
+        if os.name == "nt":  # no command line without extra tools: settle for "a Python process"
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, timeout=5).stdout
+            return out.strip().lower().startswith('"py')
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5).stdout
+        return "oauth.py" in out
+    except Exception:
+        return False
 
 
 def login():
     a, state, got = app(), secrets.token_urlsafe(16), {}
 
     # Only one sign-in at a time: stop an earlier helper still waiting for its callback.
-    pidfile = os.path.join(DIR, "login.pid")
     try:
-        old = int(open(pidfile).read())
-        if old != os.getpid():
+        old = int(open(PIDFILE).read())
+        if old != os.getpid() and is_helper(old):
             os.kill(old, 9)
             time.sleep(0.5)
     except Exception:
         pass
-    open(pidfile, "w").write(str(os.getpid()))
+    with open(PIDFILE, "w") as f:
+        f.write(str(os.getpid()))
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -76,16 +169,17 @@ def login():
             if u.path != "/callback":
                 self.send_response(404); self.end_headers(); return
             q = urllib.parse.parse_qs(u.query)
-            ok = q.get("state", [""])[0] == state and "code" in q
+            ours = q.get("state", [""])[0] == state  # anything else didn't come from this sign-in
+            ok = ours and "code" in q
             if ok:
                 got["code"] = q["code"][0]
-            elif "error" in q:
+            elif ours and "error" in q:
                 got["error"] = q.get("error_description", q["error"])[0]
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             msg = ("Signed in to Jira. You can close this tab." if ok else
-                   f"Jira sign-in failed: {got.get('error') or 'this link is from an older sign-in attempt'}. Close this tab and click Log in again.")
+                   f"Jira sign-in failed: {html.escape(got.get('error') or 'this link is from an older sign-in attempt')}. Close this tab and click Log in again.")
             self.wfile.write(f"<html><body style='font-family:sans-serif;padding:40px'>{msg}</body></html>".encode())
 
         def log_message(self, *a):
@@ -124,7 +218,6 @@ def login():
     # macOS: Python's webbrowser goes through osascript, which silently does nothing when herdr starts us.
     opened = False
     if sys.platform == "darwin":
-        import subprocess
         opened = subprocess.run(["/usr/bin/open", url], capture_output=True).returncode == 0
     if not opened:
         webbrowser.open(url)
@@ -137,10 +230,7 @@ def login():
             s.handle_request()
     for s in servers:
         s.server_close()
-    try:
-        os.remove(pidfile)
-    except Exception:
-        pass
+    drop_pidfile()
     if "code" not in got:
         fail(got.get("error") or "Sign-in timed out or was cancelled.")
     tok = post("https://auth.atlassian.com/oauth/token", {
@@ -159,20 +249,14 @@ def login():
 
 
 def token():
-    app()
-    try:
-        t = json.load(open(TOKENS, encoding="utf-8"))
-    except Exception:
-        fail("no-login")
+    a = app()
+    t = load() or fail("no-login")
     if time.time() > t.get("expires_at", 0):
-        a = app()
-        try:
-            tok = post("https://auth.atlassian.com/oauth/token", {
-                "grant_type": "refresh_token", "client_id": a["client_id"], "client_secret": a["client_secret"],
-                "refresh_token": t["refresh_token"]})
-        except Exception:
-            fail("no-login")
-        t = save(tok, t)
+        with locked():
+            # Another panel may have refreshed while we waited: use its tokens, ours are spent.
+            t = load() or fail("no-login")
+            if time.time() > t.get("expires_at", 0):
+                t = refresh(a, t)
     print(json.dumps({"access_token": t["access_token"], "cloud_id": t["cloud_id"], "site": t["site"]}))
 
 
