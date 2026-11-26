@@ -6,8 +6,8 @@ to herdr; it only stays large while Chrome shows its one-time microphone prompt.
 /text; the mod polls GET /state for live text and POSTs /stop. On /done this prints {"text": ...} or
 {"error": ...}, closes the window and exits. Audio is recognised by Google's speech service.
 
-Note: on this PC a Chrome policy (UserDataDir) pins Chrome to the main profile, so the window opens in the
-user's own Chrome and command-line switches such as --user-data-dir are ignored there.
+Note: where a Chrome policy (UserDataDir) pins Chrome to the main profile, the window opens in the user's own
+Chrome and command-line switches such as --user-data-dir are ignored.
 """
 import ctypes, json, os, shutil, socket, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +16,7 @@ PORT = 8766
 WIN, MAC = os.name == "nt", sys.platform == "darwin"
 SMALL, BIG = (240, 64), (460, 260)  # BIG only while Chrome's mic prompt needs room
 TITLE = "herdr dictation"
+ORIGINS = (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}")  # where our own page can be loaded from
 BLOCKED = ("Microphone blocked. Allow it for 127.0.0.1:8766 in Chrome (site settings), and check the system setting: "
            "Windows: Settings > Privacy & security > Microphone > allow desktop apps. "
            "Mac: System Settings > Privacy & Security > Microphone > Google Chrome.")
@@ -76,7 +77,13 @@ class H(BaseHTTPRequestHandler):
         else: self.reply("{}")
 
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        # A browser names the page a request comes from: only our own page may post. The mod and
+        # `stt.py stop` aren't browsers and send no Origin.
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in ORIGINS:
+            self.send_response(403); self.send_header("Content-Length", "0"); self.end_headers(); return
+        try: n = int(self.headers.get("Content-Length") or 0)
+        except ValueError: n = 0
         try: body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError: body = {}
         if self.path == "/text": state["text"] = body.get("text", "")
@@ -104,6 +111,13 @@ def find_chrome():
         return next((c for c in (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
                                  os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")) if os.path.exists(c)), None)
     return next((shutil.which(c) for c in ("google-chrome", "google-chrome-stable", "chromium") if shutil.which(c)), None)
+
+
+def launch(cmd):
+    """Start the browser on its own: no shared pipes, and it outlives this helper's parent."""
+    own = ({"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP} if WIN
+           else {"start_new_session": True})
+    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **own)
 
 
 def work_area():
@@ -215,14 +229,14 @@ def main():
     flags = [f"--app=http://127.0.0.1:{PORT}/", f"--window-size={SMALL[0]},{SMALL[1]}", f"--window-position={x},{y}"]
     if MAC:
         # the binary, not `open`: a running Chrome ignores `open --args`, but forwards a direct launch's --app
-        subprocess.Popen([os.path.join(chrome, "Contents/MacOS/Google Chrome"), *flags])
+        launch([os.path.join(chrome, "Contents/MacOS/Google Chrome"), *flags])
     else:
         prev = ctypes.windll.user32.GetForegroundWindow() if WIN else None
         if WIN:
             ready = threading.Event()
             threading.Thread(target=hide_new_windows, args=(ready,), daemon=True).start()
             ready.wait(2)
-        subprocess.Popen([chrome, *flags])
+        launch([chrome, *flags])
         if WIN: threading.Thread(target=manage_window, args=(prev,), daemon=True).start()
     end = time.time() + 600
     while not state["done"] and time.time() < end: time.sleep(0.1)

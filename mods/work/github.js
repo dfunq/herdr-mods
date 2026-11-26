@@ -2,11 +2,32 @@
 // All data comes from the `gh` CLI (your own login). Watched repos live in shared state "github.watch".
 import { div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextView } from "gpui-base";
-import { exec, home, theme, shared, setShared, openOverlay, closeOverlay, checking, terminals, window } from "herdr";
+import { exec, home, readTextFile, theme, shared, setShared, openOverlay, closeOverlay, checking, terminals, window } from "herdr";
 import * as fs from "fs/promises";
 
 export const GH_ICON = "mods/work/icons/github.svg";
-const openUrl = url => window().platform === "windows" ? exec("rundll32", ["url.dll,FileProtocolHandler", url]) : exec("open", [url]);
+// Only web and mail links are handed to the system: ticket and PR text can carry any link.
+export const openUrl = url => {
+  if (!/^(https?:\/\/|mailto:)/i.test(String(url || ""))) return;
+  return window().platform === "windows" ? exec("rundll32", ["url.dll,FileProtocolHandler", url]) : exec("open", [url]);
+};
+// False only while the window is hidden; polling waits for it to come back.
+export const shown = () => { try { return window()?.visible !== false; } catch { return true; } };
+// peerlink labels each agent's terminal with the agent's id (a3); its name comes from ~/.peerlink/agents.json.
+let agentNames = {};
+export const loadAgentNames = async cx => {
+  try {
+    const d = JSON.parse(await readTextFile(`${home()}/.peerlink/agents.json`) || "{}");
+    agentNames = Object.fromEntries((d.agents || []).filter(a => a.id && a.name).map(a => [a.id, a.name]));
+    cx?.notify();
+  } catch {}
+};
+// An agent's name, given its name or its id.
+export const agentName = v => agentNames[v] || v;
+export const liveAgents = () => terminals()
+  .filter(k => k.state === "live" && k.labels?.["peerlink.agent"])
+  .map(k => ({ name: agentName(k.labels["peerlink.agent"]), address: k.address, status: typeof k.status === "string" ? k.status : (k.status?.state || "") }))
+  .sort((a, b) => a.name.localeCompare(b.name));
 const ago = iso => {
   const m = Math.max(0, (Date.now() - Date.parse(iso)) / 60000);
   return m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
@@ -43,6 +64,7 @@ export const prColor = p => p.merged || p.state === "MERGED" ? PURPLE : p.state 
 // PRs (any state) in the watched repos' owners whose title, branch or body names this key.
 export async function prsForKey(key) {
   const owners = [...new Set((watched() || await localRepos()).map(r => r.split("/")[0]))];
+  if (!owners.length) return [];  // no owner to search in would search all of GitHub
   const q = `"${key}" is:pr ${owners.map(o => `user:${o}`).join(" ")}`;
   const d = await gql(`query($q:String!){search(query:$q,type:ISSUE,first:20){nodes{... on PullRequest{number title body headRefName state isDraft merged repository{nameWithOwner}}}}}`, { q });
   const re = new RegExp(`(^|[^A-Za-z0-9])${key}(?!\\d)`, "i");
@@ -95,9 +117,10 @@ async function searchPRs(q) {
   return { total: d.search.issueCount, prs: d.search.nodes.filter(n => n.number) };
 }
 
-// Repos cloned in ~/.dev, as owner/name: the default watch list and the settings candidates.
+// Repos cloned in your repos folder (shared "github.root", ~/.dev until set), as owner/name: the default watch list
+// and the settings candidates.
 export async function localRepos() {
-  const root = `${home()}/.dev`;
+  const root = String(shared("github.root") || "~/.dev").replace(/^~(?=$|[\\/])/, home());
   let names = [];
   try { names = (await fs.readdir(root, { withFileTypes: true })).filter(e => e.isDirectory() && !e.name.startsWith(".")).map(e => e.name); } catch {}
   const urls = await Promise.all(names.map(n => exec("git", ["-C", `${root}/${n}`, "remote", "get-url", "origin"]).then(r => r.code === 0 ? r.stdout.trim() : "").catch(() => "")));
@@ -130,7 +153,8 @@ export function installGithub(P) {
     });
     if (checking()) return;
     cx.spawn(async cx => { this.ghCandidates = await localRepos(); this.ghLoad(cx); });
-    cx.timer.every(180000, cx => { if (this.tool === "github") this.ghLoad(cx); });
+    // Polls only while the window shows; a tick soon after it comes back catches up.
+    cx.timer.every(15000, cx => { if (this.tool === "github" && shown() && Date.now() - (this.ghLoadedAt || 0) >= 180000) this.ghLoad(cx); });
   };
 
   P.ghRepos = function () { return watched() || this.ghCandidates || []; };
@@ -168,23 +192,32 @@ export function installGithub(P) {
 
   P.ghLoad = function (cx) {
     if (!enabled("github")) return;
+    // Only the newest request may fill the list: an older, slower answer is for a tab or search already left.
+    const seq = this.ghSeq = (this.ghSeq || 0) + 1, issues = this.ghKind === "issue";
+    this.ghLoadedAt = Date.now();
     cx.spawn(async cx => {
+      const stale = () => seq !== this.ghSeq;
       this.ghLoading = true; cx.notify();
       try {
         if (this.ghView === "watched" && !this.ghQuery && !this.ghRepos().length) { this.prs = []; this.ghError = "no-repos"; return; }
-        if (this.ghKind === "issue") {
-          const r = await searchIssues(this.ghSearch());
+        const q = this.ghSearch();
+        if (issues) {
+          const r = await searchIssues(q);
+          if (stale()) return;
           this.ghIssues = r.items; this.ghTotal = r.total;
         } else {
-          const r = await searchPRs(this.ghSearch());
+          const r = await searchPRs(q);
+          if (stale()) return;
           this.prs = r.prs; this.ghTotal = r.total;
         }
         this.ghError = null; this.ghAt = new Date();
       } catch (e) {
-        if (this.ghKind === "issue") this.ghIssues = []; else this.prs = [];
+        if (stale()) return;
+        if (issues) this.ghIssues = []; else this.prs = [];
         this.ghError = String(e?.message || e);
       } finally {
-        this.ghLoading = false; cx.notify();
+        if (!stale()) this.ghLoading = false;
+        cx.notify();
       }
     });
   };
@@ -271,7 +304,10 @@ export function installGithub(P) {
     if (this.ghError) return div().p(12).text_size(12).text_color(t.blocked).child(this.ghError);
     const issues = this.ghKind === "issue", items = issues ? this.ghIssues : this.prs, row = p => issues ? this.issueRow(p) : this.prRow(p);
     if (!items.length) return div().p(12).text_size(12).text_color(t.dim).child(this.ghLoading ? "Loading…" : issues ? "No open issues." : "No open pull requests.");
-    if (this.ghView === "mine" || this.ghQuery) return v_flex().px(4).pt(4).gap(2).children(items.map(row));
+    // GitHub's search answers with the first 60: say so when there are more.
+    const more = (this.ghTotal || 0) > items.length
+      ? div().px(8).py(8).text_size(11).text_color(t.dim).child(`Showing ${items.length} of ${this.ghTotal}. Search to narrow it down.`) : null;
+    if (this.ghView === "mine" || this.ghQuery) return v_flex().px(4).pt(4).gap(2).children(items.map(row)).when(!!more, el => el.child(more));
     const by = new Map();
     for (const p of items) { const r = p.repository.nameWithOwner; (by.get(r) ?? by.set(r, []).get(r)).push(p); }
     return v_flex().px(4).pb(8).children([...by.entries()].map(([repo, prs]) => {
@@ -288,7 +324,7 @@ export function installGithub(P) {
             .on_click((_e, cx) => { cx.stop_propagation(); openUrl(`https://github.com/${repo}/${issues ? "issues" : "pulls"}`); }).child("↗"))
           .child(div().px(7).rounded(8).bg(t.raised).text_size(10.5).font_semibold().text_color(t.muted).child(String(prs.length))))
         .when(!shut, el => el.child(v_flex().pt(4).gap(2).children(prs.map(row))));
-    }));
+    })).when(!!more, el => el.child(more));
   };
 
   P.renderGithub = function () {
@@ -326,6 +362,7 @@ export function installGithub(P) {
   // ---- PR details dialog (an overlay copy with props.pr) ----
   P.loadPR = function (cx) {
     const { repo, number } = this.prRef, [owner, name] = repo.split("/");
+    const current = () => this.prRef?.repo === repo && this.prRef?.number === number;
     cx.spawn(async cx => {
       try {
         const d = await gql(`query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){pullRequest(number:$num){
@@ -336,11 +373,14 @@ export function installGithub(P) {
           checkCommit: commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:40){nodes{
             ... on CheckRun{name conclusion status detailsUrl} ... on StatusContext{context state targetUrl}}}}}}}}}}`,
           { o: owner, n: name, num: number });
-        this.pr = d.repository.pullRequest;
-        if (!this.pr) this.prError = `No PR ${repo}#${number}.`;
-        else { this.prCache?.set(`${repo}#${number}`, this.pr); this.linkPR?.(this.pr, cx); }
+        const pr = d.repository.pullRequest;
+        if (pr) this.prCache?.set(`${repo}#${number}`, pr);
+        if (!current()) return;  // another PR was picked while this one loaded
+        this.pr = pr;
+        if (!pr) this.prError = `No PR ${repo}#${number}.`;
+        else this.linkPR?.(pr, cx);
       } catch (e) {
-        this.prError = String(e?.message || e);
+        if (current()) this.prError = String(e?.message || e);
       } finally {
         cx.notify();
       }
@@ -411,8 +451,9 @@ export function installGithub(P) {
   P.ghSettingsInit = function (cx) {
     this.stTab = "integrations";
     this.intOn = { jira: enabled("jira"), github: enabled("github") };
-    this.defAgent = (shared("jira.send") || {}).agent || "";
-    this.agentList = terminals().filter(k => k.state === "live" && k.labels?.["peerlink.agent"]).map(k => k.labels["peerlink.agent"]).sort();
+    // Agents go by name here, as in the send dialog: the default saved is the name it looks for.
+    this.defAgent = agentName((shared("jira.send") || {}).agent || "");
+    this.agentList = liveAgents().map(a => a.name);
     this.watchSel = new Set(watched() || []);
     this.watchSet = !!watched();
     this.linkSet = linkCfg();
@@ -424,6 +465,9 @@ export function installGithub(P) {
     this.addInput.on("submit", (_e, cx) => this.addRepo(cx));
     if (checking()) return;
     cx.spawn(async cx => {
+      await loadAgentNames();
+      this.defAgent = agentName(this.defAgent); this.agentList = liveAgents().map(a => a.name);
+      cx.notify();
       this.cands = await localRepos();
       if (!this.watchSet) this.watchSel = new Set(this.cands);
       cx.notify();

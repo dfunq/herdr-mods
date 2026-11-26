@@ -20,14 +20,25 @@ PAD = "\u2800"  # blank braille cell: renders as a space, survives trimming
 MODEL_WIDTH = 6  # len("sonnet"), so $effort lines up
 
 
+PATHS = {}     # session id -> transcript path, so the projects folder isn't searched every tick
+REPORTED = {}  # pane id -> the tokens herdr last took from us
+
+
 def herdr(*args):
-    out = subprocess.run([HERDR, *args], capture_output=True, text=True)
-    return json.loads(out.stdout) if out.stdout.strip().startswith("{") else None
+    """herdr's JSON answer, or None when it can't be reached or says something else."""
+    try:
+        out = subprocess.run([HERDR, *args], capture_output=True, text=True, timeout=10)
+        return json.loads(out.stdout) if out.stdout.strip().startswith("{") else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
 
 
 def transcript_path(session_id):
-    paths = glob.glob(os.path.join(PROJECTS, "*", f"{session_id}.jsonl"))
-    return paths[0] if paths else None
+    path = PATHS.get(session_id)
+    if not path or not os.path.exists(path):
+        paths = glob.glob(os.path.join(PROJECTS, "*", f"{glob.escape(session_id)}.jsonl"))
+        path = PATHS[session_id] = paths[0] if paths else None
+    return path
 
 
 def transcript_model(path):
@@ -64,12 +75,19 @@ def short(model):
 
 
 def agents():
-    listing = herdr("agent", "list") or {}
-    for a in listing.get("result", {}).get("agents", []):
+    """[(pane id, transcript path)] for the Claude agent panes, or None when herdr didn't answer."""
+    listing = herdr("agent", "list")
+    if listing is None:
+        return None
+    found = []
+    for a in (listing.get("result") or {}).get("agents") or []:
         session = (a.get("agent_session") or {}).get("value")
-        path = a.get("agent") == "claude" and session and transcript_path(session)
+        if a.get("agent") != "claude" or not session or not a.get("pane_id"):
+            continue  # not an agent pane of ours: no file search for it
+        path = transcript_path(session)
         if path:
-            yield a["pane_id"], path
+            found.append((a["pane_id"], path))
+    return found
 
 
 def report(pane_id, path):
@@ -78,40 +96,74 @@ def report(pane_id, path):
         return
     args = ["--token", f"model={short(model).ljust(MODEL_WIDTH, PAD)}"]
     args += ["--token", f"effort={EFFORT.get(effort, effort)}"] if effort else ["--clear-token", "effort"]
-    subprocess.run([HERDR, "pane", "report-metadata", pane_id,
-                    "--source", "herdr-mods.agent-model", *args],
-                   capture_output=True)
+    if REPORTED.get(pane_id) == args:
+        return  # herdr already shows this
+    try:
+        done = subprocess.run([HERDR, "pane", "report-metadata", pane_id,
+                               "--source", "herdr-mods.agent-model", *args],
+                              capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        done = False
+    if done:
+        REPORTED[pane_id] = args
+    else:
+        REPORTED.pop(pane_id, None)
 
 
 def refresh():
     event = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}")
     only = (event.get("data") or event).get("pane_id")
-    for pane_id, path in agents():
+    for pane_id, path in agents() or []:
         if not only or pane_id == only:
             report(pane_id, path)
 
 
 def watch():
-    seen = {}
-    while True:
-        for pane_id, path in agents():
-            try:
-                mtime = os.path.getmtime(path)
-            except OSError:
-                continue
-            if seen.get(pane_id) != (path, mtime):
-                seen[pane_id] = (path, mtime)
-                report(pane_id, path)
+    seen, misses = {}, 0
+    while misses < 5:  # five in a row: herdr is gone, and so are we
+        found = agents()
+        if found is None:
+            misses += 1
+            seen.clear(); REPORTED.clear()  # a restarted herdr has lost what we told it
+        else:
+            misses = 0
+            live = {pane_id for pane_id, _ in found}
+            for gone in [p for p in list(seen) + list(REPORTED) if p not in live]:
+                seen.pop(gone, None); REPORTED.pop(gone, None)  # a pane id can come back as a new pane
+            for pane_id, path in found:
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if seen.get(pane_id) != (path, mtime):
+                    seen[pane_id] = (path, mtime)
+                    report(pane_id, path)
         time.sleep(3)
 
 
 def start_watcher():
     """Fork a detached watcher unless one is already running."""
+    global _lock
+    os.makedirs(STATE, exist_ok=True)
     try:
-        os.kill(int(open(PIDFILE).read()), 0)
-        return
-    except (OSError, ValueError):
-        pass
+        import fcntl
+    except ImportError:  # no file locks here: trust the pid in the file
+        fcntl = None
+        try:
+            os.kill(int(open(PIDFILE).read()), 0)
+            return
+        except (OSError, ValueError):
+            pass
+    if fcntl:
+        # The running watcher holds a lock on the pid file for its whole life. A pid alone proves
+        # nothing (pids get reused); the lock goes when its holder dies. Forked children keep it.
+        _lock = open(PIDFILE, "a+")
+        try:
+            fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        except OSError:
+            pass  # a filesystem without locks: carry on unlocked
     if os.fork():
         return
     os.setsid()
@@ -119,12 +171,18 @@ def start_watcher():
         os._exit(0)
     devnull = os.open(os.devnull, os.O_RDWR)
     for fd in (0, 1, 2):
-        os.dup2(devnull, fd)
-    os.makedirs(STATE, exist_ok=True)
-    with open(PIDFILE, "w") as f:
-        f.write(str(os.getpid()))
+        if not _lock or fd != _lock.fileno():
+            os.dup2(devnull, fd)
+    if _lock:  # the pid is for people; the lock is what counts
+        _lock.seek(0); _lock.truncate(); _lock.write(str(os.getpid())); _lock.flush()
+    else:
+        with open(PIDFILE, "w") as f:
+            f.write(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
     watch()
+
+
+_lock = None  # the watcher's hold on the pid file
 
 
 if __name__ == "__main__":
